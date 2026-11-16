@@ -39,4 +39,8 @@ Not solved here: root has no internet path by design. Until the owner decides (o
 
 ## Rollback
 
-Everything here is additive. To undo the firewall from the console: `sudo nft delete table inet atlas`. Units: `systemctl disable --now <unit>`; remove `/etc/systemd/system/atlas-*`.
+Everything here is additive. Do **not** remove the firewall while ATLAS services run: with the `atlas` table gone the kernel's policy is accept, and every service could reach the internet.
+
+- *A bad or unwanted ruleset change:* from the console, stop the ATLAS units first (`sudo systemctl stop 'atlas-*.service'`), then load the last known-good ruleset (`sudo cp /etc/atlas/atlas.nft.prev /etc/atlas/atlas.nft && sudo nft -c -f /etc/atlas/atlas.nft && sudo systemctl reload nftables.service`), then start the units again. `provision-pi.sh` keeps `atlas.nft.prev` whenever it replaces the ruleset, and it validates (`nft -c`) a changed ruleset before replacing the installed one, then reloads it.
+- *Units:* `systemctl disable --now <unit>`; remove `/etc/systemd/system/atlas-*`.
+- *WireGuard note:* the ruleset only lets the tunnel's own packets reach the desktop's UDP 51820, identified by fwmark. Put `FwMark = 0x5182` (the `WG_FWMARK` in `/etc/atlas/nftables-site.nft`) in the `wg0` configuration, or the tunnel will not come up under the default-drop output policy.
