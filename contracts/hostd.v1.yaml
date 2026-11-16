@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: atlas-hostd API
-  version: 1.0.0
+  version: 1.1.0
   summary: Pi <-> LLM-host agent (status, sleep, GPU/VRAM report, user activity, keep-awake leases).
   description: |
     `atlas-hostd` runs on the Windows desktop as a service (PLAN.md §5.4, §2.8). `atlas-core` on the Pi is its
@@ -28,7 +28,7 @@ info:
     **Data minimisation:** hostd reports counts and totals, never names of the user's processes or windows.
 
     Times are RFC 3339 UTC strings. Versioning rules: contracts/README.md.
-  x-atlas-schema-revision: 1.0.0
+  x-atlas-schema-revision: 1.1.0
 servers:
   - url: http://10.77.0.2:8770
     description: Main listener, reachable only through wg0 from the Pi (10.77.0.1).
@@ -54,6 +54,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Default" }
 
   /v1/status:
     get:
@@ -67,6 +68,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Status" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Default" }
 
   /v1/gpu:
     get:
@@ -83,6 +85,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GpuReport" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Default" }
         "503":
           description: NVML unavailable (driver missing or failed).
           content:
@@ -101,6 +104,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ActivityReport" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Default" }
 
   /v1/sleep:
     post:
@@ -129,6 +133,7 @@ paths:
               schema: { $ref: "#/components/schemas/SleepRefused" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Default" }
 
   /v1/leases/{lease_id}:
     parameters:
@@ -158,13 +163,16 @@ paths:
               schema: { $ref: "#/components/schemas/Lease" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Default" }
     delete:
       tags: [power]
       operationId: deleteLease
       summary: Release a lease.
       responses:
-        "204": { description: Released (also returned if it did not exist). }
+        "204": { description: Released (also returned if a well-formed lease_id did not exist). }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Default" }
 
   /v1/helper/activity:
     post:
@@ -183,6 +191,7 @@ paths:
         "204": { description: Recorded. }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Default" }
 
 components:
   responses:
@@ -192,7 +201,17 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     BadRequest:
-      description: Body failed validation.
+      description: |
+        The request failed validation. Codes: `INVALID_BODY` (body doesn't match the schema),
+        `BODY_TOO_LARGE` (body over 4 KiB), `INVALID_LEASE_ID` (`lease_id` path parameter doesn't match `Id`),
+        `LEASE_LIMIT` (a PUT would create a 17th lease).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Default:
+      description: |
+        Any other error: 404 `NOT_FOUND` (unknown route), 405 `METHOD_NOT_ALLOWED`, 500 `INTERNAL_ERROR`
+        (unexpected failure; not retryable, unlike the 503 on `/v1/gpu`).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -263,21 +282,34 @@ components:
     PowerInfo:
       type: object
       additionalProperties: false
-      required: [sleep_states_available, preferred_sleep_state, last_resume_at, last_wake_source]
+      required: [sleep_states_available, preferred_sleep_state, booted_at, last_resume_at, last_wake_source]
       properties:
         sleep_states_available:
           type: array
           uniqueItems: true
           items: { $ref: "#/components/schemas/SleepState" }
           description: From `powercfg /a`.
-        preferred_sleep_state: { $ref: "#/components/schemas/SleepState" }
+        preferred_sleep_state:
+          description: >-
+            Null exactly when `sleep_states_available` is empty; `sleep_eligibility.reasons` then contains
+            `sleep_unsupported`.
+          oneOf:
+            - $ref: "#/components/schemas/SleepState"
+            - type: "null"
+        booted_at:
+          type: string
+          format: date-time
+          description: When the OS last booted.
         last_resume_at:
           description: Last resume from sleep or hibernate since boot; null if none.
           oneOf:
             - { type: string, format: date-time }
             - { type: "null" }
         last_wake_source:
-          description: Windows-reported source of the last resume, generalised (no device names).
+          description: >-
+            Windows-reported source of the wake-cycle start (the last resume, or the boot if there has been no
+            resume since), generalised (no device names). `unknown` when Windows recorded no source for a
+            cold boot.
           oneOf:
             - enum: [network, power_button, input_device, timer, unknown]
             - { type: "null" }
@@ -313,8 +345,16 @@ components:
           uniqueItems: true
           items: { enum: [thermal, power, other] }
           description: Empty when not throttling. Generalised from NVML clock-throttle reasons.
-        llm_server_vram_mb: { type: integer, minimum: 0, description: VRAM held by the LLM server process(es). }
-        foreign_vram_mb: { type: integer, minimum: 0, description: VRAM held by every other process. }
+        llm_server_vram_mb:
+          type: integer
+          minimum: 0
+          description: >-
+            VRAM held by the LLM server process(es). 0 when the driver doesn't report per-process memory (common
+            under WDDM); `vram_free_mb` is always authoritative and is the only VRAM field the Pi acts on.
+        foreign_vram_mb:
+          type: integer
+          minimum: 0
+          description: VRAM held by every other process; all used VRAM when per-process memory isn't reported.
         foreign_process_count: { type: integer, minimum: 0 }
         sampled_at: { type: string, format: date-time }
 
@@ -331,7 +371,11 @@ components:
             - { type: integer, minimum: 0 }
             - { type: "null" }
         fullscreen_app: { type: boolean }
-        foreign_gpu_busy: { type: boolean, description: A non-LLM process is using the GPU heavily (threshold set in hostd config). }
+        foreign_gpu_busy:
+          type: boolean
+          description: >-
+            A non-LLM process is above the hostd per-process GPU threshold, or total GPU utilisation is at or above
+            `sleep.foreign_gpu_util_pct` (hostd config, default 30) while the LLM server is idle.
         reported_at:
           oneOf:
             - { type: string, format: date-time }
@@ -361,8 +405,11 @@ components:
           type: string
           format: date-time
           description: |
-            When the Pi sent the first magic packet. hostd accepts the claim only if the last resume happened after
-            this time (minus 5 s clock skew) and `last_wake_source` is `network` or `unknown`.
+            When the Pi sent the first magic packet. The wake-cycle start is `last_resume_at` if there has been a
+            resume since boot, otherwise `booted_at`. hostd accepts the claim only if
+            `first_packet_at - 5 s <= wake-cycle start <= first_packet_at + 90 s` (5 s clock skew; the Pi abandons a
+            wake after 60 s) and `last_wake_source` is `network` or `unknown`. Otherwise the request is refused
+            with `not_atlas_woken`, unless the owner opted in to ATLAS sleeping a host they woke.
 
     SleepAccepted:
       type: object
