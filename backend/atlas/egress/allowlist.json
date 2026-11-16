@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "listen_host": "127.0.0.1",
+  "callers": {
+    "atlas-google": {
+      "port": 3131,
+      "hosts": ["gmail.googleapis.com", "oauth2.googleapis.com", "www.googleapis.com"]
+    },
+    "atlas-discord": {
+      "port": 3132,
+      "hosts": ["discord.com", "gateway.discord.gg"]
+    },
+    "atlas-executor": {
+      "port": 3133,
+      "hosts": ["gmail.googleapis.com", "oauth2.googleapis.com", "discord.com"]
+    },
+    "atlas-panels": {
+      "port": 3134,
+      "hosts": ["api.open-meteo.com"]
+    },
+    "atlas-market": {
+      "port": 3135,
+      "hosts": ["api.twelvedata.com"]
+    },
+    "atlas-search": {
+      "port": 3136,
+      "hosts": []
+    }
+  }
+}
