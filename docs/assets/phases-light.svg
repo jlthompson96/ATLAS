@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="Build status: Step C0 and atlas-hostd done; the HUD and Pi foundations built and awaiting merge; Phase 0 next, Phases 1 to 6 planned">
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  </style>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f4f9fc"/><stop offset="1" stop-color="#e3eef5"/></linearGradient>
+  </defs>
+  <path d="M16 0H1184L1200 16V284L1184 300H16L0 284V16Z" fill="url(#bg)"/>
+  <path d="M16 .5H1183.5L1199.5 16.5V283.5L1183.5 299.5H16.5L.5 283.5V16.5Z" fill="none" stroke="#0a7f9e" stroke-opacity="0.5"/>
+  <text x="32" y="38" class="mono" font-size="13" letter-spacing="2" fill="#486676">BUILD · CONTRACTS FIRST, THEN THREE PARALLEL AGENTS</text>
+  <text x="32" y="176" class="mono" font-size="13" letter-spacing="2" fill="#486676">PHASES · EACH ENDS WITH AN ADR AND RECORDED BENCHMARKS</text>
+
+  <g opacity="1">
+    <path d="M42.0 52H302.5V130L292.5 140H32.0V62Z" fill="#ffffff" fill-opacity="0.85" stroke="#0a8550" stroke-width="1.5"/>
+    <rect x="32.0" y="62" width="3" height="68" fill="#0a8550"/>
+    <text x="48.0" y="78" class="mono" font-size="13" letter-spacing="1.5" fill="#0a8550">C0</text>
+    <text x="48.0" y="102" class="sans" font-size="17" fill="#0b2230">Repo + contracts v1</text>
+    <text x="48.0" y="124" class="mono" font-size="12" fill="#486676">Done</text>
+  </g>
+
+  <g opacity="1">
+    <path d="M330.5 52H591.0V130L581.0 140H320.5V62Z" fill="#ffffff" fill-opacity="0.85" stroke="#0a8550" stroke-width="1.5"/>
+    <rect x="320.5" y="62" width="3" height="68" fill="#0a8550"/>
+    <text x="336.5" y="78" class="mono" font-size="13" letter-spacing="1.5" fill="#0a8550">B</text>
+    <text x="336.5" y="102" class="sans" font-size="17" fill="#0b2230">atlas-hostd</text>
+    <text x="336.5" y="124" class="mono" font-size="12" fill="#486676">Merged · hostd.v1 1.1.0</text>
+  </g>
+
+  <g opacity="1">
+    <path d="M619.0 52H879.5V130L869.5 140H609.0V62Z" fill="#ffffff" fill-opacity="0.85" stroke="#a86200" stroke-width="1.5"/>
+    <rect x="609.0" y="62" width="3" height="68" fill="#a86200"/>
+    <text x="625.0" y="78" class="mono" font-size="13" letter-spacing="1.5" fill="#a86200">A</text>
+    <text x="625.0" y="102" class="sans" font-size="17" fill="#0b2230">HUD frontend</text>
+    <text x="625.0" y="124" class="mono" font-size="12" fill="#486676">Built · awaiting merge</text>
+  </g>
+
+  <g opacity="1">
+    <path d="M907.5 52H1168.0V130L1158.0 140H897.5V62Z" fill="#ffffff" fill-opacity="0.85" stroke="#a86200" stroke-width="1.5"/>
+    <rect x="897.5" y="62" width="3" height="68" fill="#a86200"/>
+    <text x="913.5" y="78" class="mono" font-size="13" letter-spacing="1.5" fill="#a86200">C</text>
+    <text x="913.5" y="102" class="sans" font-size="17" fill="#0b2230">Pi foundations</text>
+    <text x="913.5" y="124" class="mono" font-size="12" fill="#486676">Built · awaiting review</text>
+  </g>
+
+  <g opacity="1">
+    <path d="M42.0 190H185.7V268L175.7 278H32.0V200Z" fill="#ffffff" fill-opacity="0.85" stroke="#0091ad" stroke-width="1.5"/>
+    <rect x="32.0" y="200" width="3" height="68" fill="#0091ad"/>
+    <text x="48.0" y="216" class="mono" font-size="13" letter-spacing="1.5" fill="#0091ad">PHASE 0</text>
+    <text x="48.0" y="240" class="sans" font-size="17" fill="#0b2230">Pi hardening</text>
+    <text x="48.0" y="262" class="mono" font-size="12" fill="#486676">Next · hardware</text>
+  </g>
+
+  <g opacity="0.55">
+    <path d="M205.7 190H349.4V268L339.4 278H195.7V200Z" fill="#ffffff" fill-opacity="0.85" stroke="#486676" stroke-width="1.5" stroke-dasharray="4 4"/>
+    <rect x="195.7" y="200" width="3" height="68" fill="#486676"/>
+    <text x="211.7" y="216" class="mono" font-size="13" letter-spacing="1.5" fill="#486676">PHASE 1</text>
+    <text x="211.7" y="240" class="sans" font-size="17" fill="#0b2230">LLM link + wake</text>
+    <text x="211.7" y="262" class="mono" font-size="12" fill="#486676">Planned</text>
+  </g>
+
+  <g opacity="0.55">
+    <path d="M369.4 190H513.0999999999999V268L503.0999999999999 278H359.4V200Z" fill="#ffffff" fill-opacity="0.85" stroke="#486676" stroke-width="1.5" stroke-dasharray="4 4"/>
+    <rect x="359.4" y="200" width="3" height="68" fill="#486676"/>
+    <text x="375.4" y="216" class="mono" font-size="13" letter-spacing="1.5" fill="#486676">PHASE 2</text>
+    <text x="375.4" y="240" class="sans" font-size="17" fill="#0b2230">HUD shell</text>
+    <text x="375.4" y="262" class="mono" font-size="12" fill="#486676">Planned</text>
+  </g>
+
+  <g opacity="0.55">
+    <path d="M533.0999999999999 190H676.8V268L666.8 278H523.0999999999999V200Z" fill="#ffffff" fill-opacity="0.85" stroke="#486676" stroke-width="1.5" stroke-dasharray="4 4"/>
+    <rect x="523.0999999999999" y="200" width="3" height="68" fill="#486676"/>
+    <text x="539.0999999999999" y="216" class="mono" font-size="13" letter-spacing="1.5" fill="#486676">PHASE 3</text>
+    <text x="539.0999999999999" y="240" class="sans" font-size="17" fill="#0b2230">Voice</text>
+    <text x="539.0999999999999" y="262" class="mono" font-size="12" fill="#486676">Planned</text>
+  </g>
+
+  <g opacity="0.55">
+    <path d="M696.8 190H840.5V268L830.5 278H686.8V200Z" fill="#ffffff" fill-opacity="0.85" stroke="#486676" stroke-width="1.5" stroke-dasharray="4 4"/>
+    <rect x="686.8" y="200" width="3" height="68" fill="#486676"/>
+    <text x="702.8" y="216" class="mono" font-size="13" letter-spacing="1.5" fill="#486676">PHASE 4</text>
+    <text x="702.8" y="240" class="sans" font-size="17" fill="#0b2230">Integrations</text>
+    <text x="702.8" y="262" class="mono" font-size="12" fill="#486676">Planned</text>
+  </g>
+
+  <g opacity="0.55">
+    <path d="M860.5 190H1004.2V268L994.2 278H850.5V200Z" fill="#ffffff" fill-opacity="0.85" stroke="#486676" stroke-width="1.5" stroke-dasharray="4 4"/>
+    <rect x="850.5" y="200" width="3" height="68" fill="#486676"/>
+    <text x="866.5" y="216" class="mono" font-size="13" letter-spacing="1.5" fill="#486676">PHASE 5</text>
+    <text x="866.5" y="240" class="sans" font-size="17" fill="#0b2230">Research</text>
+    <text x="866.5" y="262" class="mono" font-size="12" fill="#486676">Planned</text>
+  </g>
+
+  <g opacity="0.55">
+    <path d="M1024.1999999999998 190H1167.8999999999999V268L1157.8999999999999 278H1014.1999999999999V200Z" fill="#ffffff" fill-opacity="0.85" stroke="#486676" stroke-width="1.5" stroke-dasharray="4 4"/>
+    <rect x="1014.1999999999999" y="200" width="3" height="68" fill="#486676"/>
+    <text x="1030.1999999999998" y="216" class="mono" font-size="13" letter-spacing="1.5" fill="#486676">PHASE 6</text>
+    <text x="1030.1999999999998" y="240" class="sans" font-size="17" fill="#0b2230">Approved writes</text>
+    <text x="1030.1999999999998" y="262" class="mono" font-size="12" fill="#486676">Planned</text>
+  </g>
+</svg>

@@ -107,9 +107,9 @@ flowchart LR
   creds -. "LoadCredentialEncrypted" .-> core & readers & exec
 
   classDef store fill:#0c1824,stroke:#1fd1ff,color:#d8f6ff
-  classDef edge fill:#1a1208,stroke:#ffb547,color:#ffe4b8
+  classDef gate fill:#1a1208,stroke:#ffb547,color:#ffe4b8
   class searx,audit,creds store
-  class egress edge
+  class egress gate
 ```
 
 Four boundaries carry the design:
@@ -337,7 +337,7 @@ Windows test checklist.
 
 ```sh
 cd hostd
-python -m atlas_hostd config.example.toml --fake-platform    # simulated platform, Mac only
+python -m atlas_hostd config.example.toml --fake-platform    # Mac only; set listener.address to 127.0.0.1 first
 ../backend/.venv/bin/pytest                                  # 225 tests
 python3 atlas_hostd/wol.py 02:00:00:00:00:01 --broadcast 192.0.2.255   # Wake-on-LAN test tool
 ```

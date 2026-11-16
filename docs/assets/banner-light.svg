@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="ATLAS — a private voice assistant. The Pi holds the keys; the desktop does the thinking.">
+  <style>
+    .spin { animation: spin 40s linear infinite; transform-origin: 250px 160px; }
+    .spin-rev { animation: spin 26s linear infinite reverse; transform-origin: 250px 160px; }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    .breathe { animation: breathe 6s ease-in-out infinite; transform-origin: 250px 160px; }
+    @keyframes breathe { 0%,100% { opacity: .55; transform: scale(.96) } 50% { opacity: 1; transform: scale(1.03) } }
+    .scan { animation: scan 7s linear infinite; }
+    @keyframes scan { 0% { transform: translateY(-40px) } 100% { transform: translateY(360px) } }
+    .cursor { animation: blink 1.1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0 } }
+    @media (prefers-reduced-motion: reduce) { .spin, .spin-rev, .breathe, .scan, .cursor { animation: none } .scan { display: none } }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  </style>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f4f9fc"/><stop offset="1" stop-color="#e3eef5"/></linearGradient>
+    <radialGradient id="glow" cx="0.21" cy="0.5" r="0.4"><stop offset="0" stop-color="#0091ad" stop-opacity="0.22"/><stop offset="1" stop-color="#0091ad" stop-opacity="0"/></radialGradient>
+    <radialGradient id="core" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#ffffff"/><stop offset="0.35" stop-color="#0091ad" stop-opacity="0.8"/><stop offset="1" stop-color="#0091ad" stop-opacity="0"/></radialGradient>
+    <linearGradient id="scanline" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0091ad" stop-opacity="0"/><stop offset="1" stop-color="#0091ad" stop-opacity="0.07"/></linearGradient>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#0a7f9e" stroke-opacity="0.08"/></pattern>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <clipPath id="frame"><path d="M16 0H1184L1200 16V304L1184 320H16L0 304V16Z"/></clipPath>
+  </defs>
+  <g clip-path="url(#frame)">
+    <rect width="1200" height="320" fill="url(#bg)"/>
+    <rect width="1200" height="320" fill="url(#grid)"/>
+    <rect width="1200" height="320" fill="url(#glow)"/>
+    <rect class="scan" x="0" y="0" width="1200" height="40" fill="url(#scanline)"/>
+
+    <!-- the orb -->
+    <circle class="breathe" cx="250" cy="160" r="46" fill="url(#core)" filter="url(#soft)"/>
+    <circle cx="250" cy="160" r="70" fill="none" stroke="#0091ad" stroke-opacity="0.85" stroke-width="2"/>
+    <g class="spin">
+      <circle cx="250" cy="160" r="92" fill="none" stroke="#0a7f9e" stroke-opacity="0.7" stroke-width="3" stroke-dasharray="52 20 8 20" />
+    </g>
+    <g class="spin-rev">
+      <circle cx="250" cy="160" r="112" fill="none" stroke="#0a7f9e" stroke-opacity="0.35" stroke-width="1.5" stroke-dasharray="120 30 4 30"/>
+    </g>
+    <circle cx="250" cy="160" r="128" fill="none" stroke="#0a7f9e" stroke-opacity="0.25" stroke-width="1" stroke-dasharray="1 7"/>
+    <!-- tick marks -->
+    <g stroke="#0091ad" stroke-opacity="0.6" stroke-width="1.5">
+      <path d="M250 22V36"/><path d="M250 284V298"/><path d="M112 160H126"/><path d="M374 160H388"/>
+    </g>
+
+    <!-- wordmark -->
+    <text x="460" y="138" class="sans" font-size="88" font-weight="300" letter-spacing="22" fill="#0b2230">ATLAS</text>
+    <path d="M462 160H1120" stroke="#0a7f9e" stroke-opacity="0.45"/>
+    <path d="M462 160H560" stroke="#0091ad" stroke-width="2"/>
+    <text x="462" y="196" class="sans" font-size="22" fill="#0b2230" fill-opacity="0.92">A private voice assistant with a HUD.</text>
+    <text x="462" y="226" class="sans" font-size="22" fill="#486676">The Pi holds the keys; the desktop does the thinking.</text>
+
+    <!-- status line -->
+    <g class="mono" font-size="14" letter-spacing="1.5">
+      <rect x="462" y="252" width="10" height="10" fill="#0a8550"/>
+      <text x="482" y="262" fill="#0a8550">STANDBY</text>
+      <text x="572" y="262" fill="#486676">· HOST: ASLEEP · EGRESS: DEFAULT DENY · TELEMETRY: NONE</text>
+      <rect class="cursor" x="1138" y="250" width="9" height="14" fill="#0091ad"/>
+    </g>
+  </g>
+  <path d="M16 .5H1183.5L1199.5 16.5V303.5L1183.5 319.5H16.5L.5 303.5V16.5Z" fill="none" stroke="#0a7f9e" stroke-opacity="0.6"/>
+</svg>
