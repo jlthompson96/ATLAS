@@ -7,6 +7,7 @@ ATLAS is a single-user, privacy-first voice assistant with a HUD. A Raspberry Pi
 - **Stay inside this repository.** Don't read, reference or copy from other projects on this machine.
 - **Contracts are fixed.** `contracts/` and the two interface files (`backend/atlas/llm/interface.py`, `backend/atlas/power/interface.py`) are versioned contracts. Never edit them in a feature branch. To change one, write a proposal in `contracts/proposals/` (process in [contracts/README.md](contracts/README.md)).
 - **One agent per git worktree and branch.** Merges need the owner's approval, and the reviewer agent's too for security-critical code (policy engine, executor, egress gateway, portfolio encryption).
+- **Check [docs/known-issues.md](docs/known-issues.md)** before working on audit, egress or `deploy/`. Several open issues there block Pi provisioning.
 - **Run the tests for your area before handing work back** (§8 of the plan lists the acceptance tests per phase).
 - **Commit only when asked.** Commit messages are imperative and scoped: `hud: add orb lite renderer`, `contracts: bump events to 1.1.0`.
 
