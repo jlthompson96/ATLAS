@@ -18,7 +18,7 @@ import type {
 import { REQUEST_RESULT_MESSAGES, resultMessage } from '../format/codes';
 import { safeText } from '../format/text';
 import { EnvelopeBuffer } from '../orb/envelope';
-import { describeOrb } from '../orb/spec';
+import { announceText } from '../orb/spec';
 import type { ClockSync } from '../protocol/clock';
 import type { ConnectionStatus } from '../protocol/client';
 import type { ServerMessage } from '../protocol/messages';
@@ -91,6 +91,7 @@ export class HudStore {
   readonly audio = { tts: new EnvelopeBuffer(), mic: new EnvelopeBuffer(60, 160) };
 
   private silent = new SvelteSet<number>();
+  private lastOrbAnnouncement = '';
   private noticeSeq = 0;
   private transport: Transport | null = null;
   private clientNow: () => number;
@@ -221,7 +222,7 @@ export class HudStore {
     this.orb = p;
     this.orbAt = this.clientNow();
     if (p.state !== 'listening') this.pttActive = false;
-    this.announce(describeOrb(p).label);
+    this.announceOrb(p);
   }
 
   private addTranscript(t: Transcript): void {
@@ -267,13 +268,20 @@ export class HudStore {
     this.audio.mic.clear();
     this.pttActive = this.pttActive && s.state.state === 'listening';
     this.synced = true;
-    this.announce(describeOrb(s.state).label);
+    this.announceOrb(s.state);
   }
 
   // --- notices and announcements -----------------------------------------------------------------
 
   announce(text: string): void {
     this.announcement = text;
+  }
+
+  /** Announce an orb state once; the 1 Hz wake-progress updates don't repeat it. */
+  private announceOrb(p: StateChanged): void {
+    const text = announceText(p);
+    if (text !== this.lastOrbAnnouncement) this.announce(text);
+    this.lastOrbAnnouncement = text;
   }
 
   notify(level: Notice['level'], text: string): void {

@@ -155,5 +155,17 @@ export function describeOrb(payload: Pick<StateChanged, 'state' | 'detail' | 'co
   }
 }
 
+/**
+ * Text for the screen-reader live region. Unlike the visible label it has no ticking seconds, so the
+ * wake countdown is announced once per stage instead of once per second.
+ */
+export function announceText(payload: Pick<StateChanged, 'state' | 'detail' | 'code' | 'wake'>): string {
+  if (payload.state === 'waking_host' && payload.wake) {
+    const names: Record<string, string> = { packet: 'sending wake packet', link: 'waiting for link', api: 'waiting for API', model: 'loading model' };
+    return `Waking core: ${names[payload.wake.stage] ?? payload.wake.stage}`;
+  }
+  return describeOrb(payload).label;
+}
+
 /** One label per state, for tests and the legend. */
 export const ALL_STATES: readonly KnownState[] = StateValues;
