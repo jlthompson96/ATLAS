@@ -4,7 +4,7 @@
 - **Author:** agent A (HUD frontend)
 - **Contract:** `contracts/events.v1.schema.json`
 - **Bump:** MINOR (new optional client message type; old servers ignore it, new HUDs tolerate a server that doesn't know it)
-- **Status:** proposed, not applied. The HUD works without it (see "Workaround").
+- **Status:** Approved 2026-11-16, applied in events.v1 1.1.0 (commit 1944f05), with a 30 s minimum interval
 
 ## What
 

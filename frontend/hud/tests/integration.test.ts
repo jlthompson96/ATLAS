@@ -236,6 +236,20 @@ run('interactive flows against the mock', () => {
     expect(await rig.store.killTask('nope')).toMatchObject({ ok: false, code: 'UNKNOWN_TASK' });
   }, 30_000);
 
+  it('activity.ping is accepted by the mock with no reply and no error', async () => {
+    const mock = await startMock(['--scenario', 'interactive']);
+    const rig = await connect(mock);
+    const before = rig.seen.length;
+    const seq = rig.client.send('activity.ping', {});
+    expect(seq).not.toBeNull();
+    await sleep(500);
+    const after = rig.seen.slice(before).filter((m) => m.type !== 'clock.pong');
+    expect(after).toEqual([]); // no request.result, nothing
+    expect(rig.warnings).toEqual([]);
+    // The connection is still healthy: the next request is answered.
+    expect((await rig.store.killTask('nope')).code).toBe('UNKNOWN_TASK');
+  });
+
   it('survives the server closing the socket (no reconnect when disabled)', async () => {
     const mock = await startMock(['--scenario', 'interactive']);
     const rig = await connect(mock);
