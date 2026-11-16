@@ -520,7 +520,7 @@ def test_request_with_a_body_is_refused(tmp_path: Path) -> None:
 
 def test_connection_limit_per_caller_and_busy_audit_is_rate_limited(tmp_path: Path) -> None:
     async def go() -> None:
-        limits = Limits(head_timeout_s=2, hello_timeout_s=1, max_per_caller=2, busy_audit_interval_s=3600)
+        limits = Limits(head_timeout_s=2, hello_timeout_s=1, max_per_caller=2, denial_burst=1, denial_rate_per_s=0.0)
         async with environment(tmp_path, limits) as env:
             held = [await connect(env, "atlas-google", b"CONNECT gmail") for _ in range(2)]  # occupy both slots
             await asyncio.sleep(0.1)
@@ -530,10 +530,15 @@ def test_connection_limit_per_caller_and_busy_audit_is_rate_limited(tmp_path: Pa
                 writer.close()
             other_reader, other_writer = await connect(env, "atlas-panels", connect_head("api.open-meteo.com"))
             assert await status_of(other_reader) == 200  # another caller's budget is untouched
-            records = await env.records_after(1)
+            await env.records_after(1)
+            await env.proxy.flush_suppressed()
+            records = await env.records_after(2)
             busy = [r for r in records if r["result"].get("code") == "TOO_MANY_CONNECTIONS"]
-            assert all(r["egress"]["block_reason"] == "limit" for r in busy)
-            assert len(busy) == 1  # five refusals, one audit record
+            aggregate = [r for r in records if r["result"].get("code") == "DENIALS_SUPPRESSED"]
+            assert len(busy) == 1  # five refusals: one individual record ...
+            assert busy[0]["egress"]["block_reason"] == "limit"
+            assert [a["egress"]["task_id"] for a in aggregate] == ["suppressed-4"]  # ... and one aggregate for the rest
+            assert aggregate[0]["egress"]["block_reason"] == "limit"
             other_writer.close()
             for _, w in held:
                 w.close()

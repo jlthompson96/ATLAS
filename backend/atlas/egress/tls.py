@@ -18,6 +18,8 @@ RECORD_HEADER: Final = 5
 HANDSHAKE: Final = 0x16
 CLIENT_HELLO: Final = 0x01
 EXT_SERVER_NAME: Final = 0x0000
+# encrypted_client_hello (0xfe0d), its draft codepoints (0xfe08-0xfe0c), legacy ESNI (0xffce), ech_outer_extensions (0xfd00)
+ECH_EXTENSIONS: Final = frozenset({0xFE0D, 0xFE08, 0xFE09, 0xFE0A, 0xFE0B, 0xFE0C, 0xFFCE, 0xFD00})
 NAME_TYPE_HOST: Final = 0x00
 
 
@@ -78,15 +80,19 @@ def parse_client_hello_sni(record: bytes) -> str:
     if hs.remaining:
         raise TlsError("TLS_INVALID")
     names: list[bytes] = []
-    seen_server_name = False
+    seen: set[int] = set()
     while extensions.remaining:
         ext_type = extensions.uint(2)
         body = extensions.vector(2)
+        if ext_type in seen:
+            raise TlsError("DUPLICATE_EXTENSION")  # RFC 8446 section 4.2: at most one extension of each type
+        seen.add(ext_type)
+        if ext_type in ECH_EXTENSIONS:
+            # Encrypted ClientHello hides the real SNI from us: the outer SNI could be the allowed host while the
+            # inner one names anything. Refuse rather than forward what we cannot inspect.
+            raise TlsError("ECH_REFUSED")
         if ext_type != EXT_SERVER_NAME:
             continue
-        if seen_server_name:
-            raise TlsError("TLS_INVALID")
-        seen_server_name = True
         listing = _Cursor(body)
         entries = _Cursor(listing.vector(2))
         if listing.remaining:
@@ -125,3 +131,5 @@ async def read_client_hello(reader: asyncio.StreamReader, timeout_s: float) -> b
         raise TlsError("TLS_TIMEOUT") from None
     except asyncio.IncompleteReadError:
         raise TlsError("TLS_INVALID") from None
+    except OSError:  # the client reset the connection mid-hello: still a decision worth recording
+        raise TlsError("CLIENT_RESET") from None

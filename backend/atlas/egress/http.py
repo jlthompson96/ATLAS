@@ -50,6 +50,8 @@ async def read_head(reader: asyncio.StreamReader, timeout_s: float) -> bytes:
                     raise RequestError("HEADER_TOO_LARGE", 431)
     except TimeoutError:
         raise RequestError("HEADER_TIMEOUT", 408) from None
+    except OSError:  # the client reset the connection mid-head
+        raise RequestError("CLIENT_RESET") from None
     head, _, extra = buffer.partition(b"\r\n\r\n")
     if extra:
         raise RequestError("BAD_REQUEST")  # a client must wait for our 200 before sending tunnel bytes

@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
 
 from atlas.audit.client import DEFAULT_SOCKET, AuditClient
+from atlas.egress.addresses import parse_networks
 from atlas.egress.config import DEFAULT_CONFIG, ConfigError, load_config
 from atlas.egress.proxy import EgressProxy
 
@@ -21,7 +23,12 @@ async def _run(config_path: Path, audit_socket: Path) -> int:
         print(f"invalid egress configuration: {exc}", file=sys.stderr)
         return 2
     audit = AuditClient(audit_socket)
-    proxy = EgressProxy(config, audit)
+    try:
+        lan_prefixes = parse_networks(os.environ.get("ATLAS_EGRESS_LAN_PREFIXES", ""))
+    except ValueError as exc:
+        print(f"invalid ATLAS_EGRESS_LAN_PREFIXES: {exc}", file=sys.stderr)
+        return 2
+    proxy = EgressProxy(config, audit, extra_forbidden=lan_prefixes)
     try:
         ports = await proxy.start()
     except OSError as exc:

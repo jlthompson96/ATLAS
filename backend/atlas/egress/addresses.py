@@ -12,6 +12,7 @@ import ipaddress
 from typing import Final
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 _FORBIDDEN_V4: Final = tuple(
     ipaddress.ip_network(n)
@@ -64,7 +65,17 @@ def normalize(address: str) -> IPAddress | None:
     return ip
 
 
-def is_public_address(ip: IPAddress) -> bool:
+def parse_networks(text: str) -> tuple[IPNetwork, ...]:
+    """Comma-separated CIDRs (the site's LAN prefixes). Raises ``ValueError`` on anything malformed."""
+    return tuple(ipaddress.ip_network(part.strip()) for part in text.split(",") if part.strip())
+
+
+def is_public_address(ip: IPAddress, extra_forbidden: tuple[IPNetwork, ...] = ()) -> bool:
+    """Public unicast only. ``extra_forbidden`` is the site's own prefixes (for example the LAN's global IPv6
+    prefix, which looks public but is the home network)."""
+    for net in extra_forbidden:
+        if net.version == ip.version and ip in net:
+            return False
     table = _FORBIDDEN_V4 if isinstance(ip, ipaddress.IPv4Address) else _FORBIDDEN_V6
     if any(ip in network for network in table):
         return False

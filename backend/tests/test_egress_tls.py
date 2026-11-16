@@ -50,7 +50,7 @@ def test_two_host_names_are_refused() -> None:
 
 def test_two_server_name_extensions_are_refused() -> None:
     both = sni_extension("a.example.com") + sni_extension("a.example.com")
-    assert code_of(client_hello(extensions=both)) == "TLS_INVALID"
+    assert code_of(client_hello(extensions=both)) == "DUPLICATE_EXTENSION"
 
 
 @pytest.mark.parametrize(

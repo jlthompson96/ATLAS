@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
 from atlas.audit.client import AuditError
-from atlas.egress.addresses import IPAddress, is_public_address, normalize
+from atlas.egress.addresses import IPAddress, IPNetwork, is_public_address, normalize
 from atlas.egress.config import HTTPS_PORT, CallerPolicy, EgressConfig, looks_like_ip_literal
 from atlas.egress.http import ConnectRequest, RequestError, parse_connect, read_head
 from atlas.egress.tls import TlsError, parse_client_hello_sni, read_client_hello
@@ -69,7 +69,11 @@ class Limits:
     idle_timeout_s: float = 600.0  # Discord's gateway heartbeats every ~41 s, so 10 minutes is generous
     max_total: int = 64
     max_per_caller: int = 16
-    busy_audit_interval_s: float = 1.0  # a flood of BUSY refusals must not flood the audit log
+    # Denial audit records are rate limited per caller (token bucket); what is suppressed is counted and written
+    # as one aggregate record per caller and reason every ``suppress_flush_interval_s`` (review F5).
+    denial_burst: float = 10.0
+    denial_rate_per_s: float = 1.0
+    suppress_flush_interval_s: float = 60.0
 
 
 async def system_resolver(host: str) -> list[str]:
@@ -109,6 +113,9 @@ _TLS_REASONS: Final = {
     "TLS_INVALID": "sni_mismatch",
     "TLS_UNSUPPORTED": "sni_mismatch",
     "TLS_TIMEOUT": "limit",
+    "ECH_REFUSED": "sni_mismatch",  # the real SNI is hidden from us
+    "DUPLICATE_EXTENSION": "sni_mismatch",
+    "CLIENT_RESET": "sni_mismatch",
 }
 
 
@@ -157,7 +164,9 @@ class EgressProxy:
         limits: Limits = Limits(),
         ports: dict[str, int] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        extra_forbidden: tuple[IPNetwork, ...] = (),
     ) -> None:
+        self._extra_forbidden = extra_forbidden
         self._config = config
         self._audit = audit
         self._resolve = resolver
@@ -168,7 +177,9 @@ class EgressProxy:
         self._servers: list[asyncio.Server] = []
         self._tasks: set[asyncio.Task[Any]] = set()
         self._active: dict[str, int] = dict.fromkeys(config.callers, 0)
-        self._last_busy_audit: dict[str, float] = {}
+        self._buckets: dict[str, tuple[float, float]] = {}  # caller -> (tokens, last refill)
+        self._suppressed: dict[tuple[str, str | None], int] = {}
+        self._flusher: asyncio.Task[None] | None = None
         self.bound_ports: dict[str, int] = {}
 
     # ---- lifecycle ---------------------------------------------------------------------------------
@@ -184,10 +195,15 @@ class EgressProxy:
         except BaseException:
             await self.close()
             raise
+        self._flusher = asyncio.create_task(self._flush_loop())
         return dict(self.bound_ports)
 
     async def close(self) -> None:
         """Stop listening, drop every open tunnel, then wait for the handlers to finish."""
+        if self._flusher is not None:
+            self._flusher.cancel()
+            await asyncio.gather(self._flusher, return_exceptions=True)
+            self._flusher = None
         for server in self._servers:
             server.close()
         tasks = list(self._tasks)
@@ -197,6 +213,7 @@ class EgressProxy:
         for server in self._servers:
             await server.wait_closed()
         self._servers.clear()
+        await self.flush_suppressed()
 
     def _make_handler(
         self, policy: CallerPolicy
@@ -233,13 +250,10 @@ class EgressProxy:
 
     async def _refuse_busy(self, caller: str, writer: asyncio.StreamWriter) -> None:
         await _reply_status(writer, 503)
-        now = self._monotonic()
-        if now - self._last_busy_audit.get(caller, -1e9) >= self._limits.busy_audit_interval_s:
-            self._last_busy_audit[caller] = now
-            record = egress_record(
-                caller, None, None, decision="blocked", status="refused", code="TOO_MANY_CONNECTIONS", reason="limit"
-            )
-            await self._audit_best_effort(record)
+        record = egress_record(
+            caller, None, None, decision="blocked", status="refused", code="TOO_MANY_CONNECTIONS", reason="limit"
+        )
+        await self._audit_denial(caller, record)
         await _close(writer)
 
     async def _session(self, policy: CallerPolicy, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -279,7 +293,7 @@ class EgressProxy:
             record = egress_record(
                 caller, host, port, decision="blocked", status=denied.result, code=denied.code, reason=denied.reason
             )
-            await self._audit_best_effort(record)
+            await self._audit_denial(caller, record)
             log.info("egress denied caller=%s code=%s", caller, denied.code)
             return
 
@@ -332,7 +346,7 @@ class EgressProxy:
         checked: list[IPAddress] = []
         for text in raw[:MAX_ANSWERS]:  # every answer is judged, even those we would never use
             ip = normalize(text)
-            if ip is None or not is_public_address(ip):
+            if ip is None or not is_public_address(ip, self._extra_forbidden):
                 raise Denied("PRIVATE_ADDRESS", reason="private_address")  # one bad answer poisons the lot
             if ip not in checked:
                 checked.append(ip)
@@ -370,6 +384,37 @@ class EgressProxy:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _take_denial_token(self, caller: str) -> bool:
+        now = self._monotonic()
+        tokens, last = self._buckets.get(caller, (self._limits.denial_burst, now))
+        tokens = min(self._limits.denial_burst, tokens + (now - last) * self._limits.denial_rate_per_s)
+        allowed = tokens >= 1.0
+        self._buckets[caller] = (tokens - 1.0 if allowed else tokens, now)
+        return allowed
+
+    async def _audit_denial(self, caller: str, record: dict[str, Any]) -> None:
+        """Audit a refusal unless this caller is flooding denials; then count it for the aggregate record."""
+        if self._take_denial_token(caller):
+            await self._audit_best_effort(record)
+        else:
+            key = (caller, record["egress"].get("block_reason"))
+            self._suppressed[key] = self._suppressed.get(key, 0) + 1
+
+    async def flush_suppressed(self) -> None:
+        """Write one aggregate record per (caller, block_reason) for denials not audited individually."""
+        pending, self._suppressed = self._suppressed, {}
+        for (caller, reason), count in sorted(pending.items(), key=lambda kv: (kv[0][0], kv[0][1] or "")):
+            record = egress_record(
+                caller, None, None, decision="blocked", status="refused", code="DENIALS_SUPPRESSED", reason=reason
+            )
+            record["egress"]["task_id"] = f"suppressed-{count}"  # audit-record.v1 has no count field (proposal filed)
+            await self._audit_best_effort(record)
+
+    async def _flush_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self._limits.suppress_flush_interval_s)
+            await self.flush_suppressed()
 
     async def _audit_best_effort(self, record: dict[str, Any]) -> None:
         try:
