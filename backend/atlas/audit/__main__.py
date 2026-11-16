@@ -129,9 +129,17 @@ async def _serve() -> int:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
-    await stop.wait()
+    stopper = asyncio.create_task(stop.wait())
+    failed = asyncio.create_task(server.fatal.wait())
+    await asyncio.wait({stopper, failed}, return_when=asyncio.FIRST_COMPLETED)
     await server.close()
+    if server.fatal.is_set() or audit_log.failed:
+        # Poisoned by an I/O error: exit non-zero (systemd restarts us) and let startup re-validate the log.
+        print("audit log failed; exiting so systemd restarts and re-validates it", file=sys.stderr)
+        audit_log.close()
+        return 1
     audit_log.append_system("service_stop")
+    audit_log.checkpoint_if_needed()  # sign the tail so a clean stop leaves nothing unsigned
     audit_log.close()
     return 0
 

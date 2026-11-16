@@ -180,28 +180,40 @@ def _obj(required: tuple[str, ...], props: dict[str, Check]) -> Check:
     return check
 
 
-def _no_float_json(value: Any, path: str) -> list[str]:
-    if value is None or isinstance(value, bool | str) or _is_int(value):
-        return []
-    if isinstance(value, list):
-        return [e for i, v in enumerate(value) for e in _no_float_json(v, f"{path}[{i}]")]
-    if isinstance(value, dict):
-        errors: list[str] = []
-        for k, v in value.items():
-            if not isinstance(k, str):
-                errors.append(f"{path}: non-string key")
-            else:
-                errors += _no_float_json(v, f"{path}.{k}")
-        return errors
-    return [f"{path}: unsupported value (floats are not allowed)"]
-
-
 def _args_redacted(value: Any, path: str) -> list[str]:
     if not isinstance(value, dict):
         return [f"{path}: must be an object"]
     if len(value) > 32:
         return [f"{path}: more than 32 properties"]
     return _no_float_json(value, path)
+
+
+MAX_ARGS_DEPTH: Final = 8  # nesting levels inside args_redacted (the object itself is level 1)
+MAX_ARGS_NODES: Final = 1000  # total values inside args_redacted
+
+
+def _no_float_json(root: Any, path: str) -> list[str]:
+    """Iterative walk (never recursive: a 1,100-deep body must not raise RecursionError) with depth and size caps."""
+    stack: list[tuple[Any, int]] = [(root, 1)]
+    nodes = 0
+    while stack:
+        value, depth = stack.pop()
+        nodes += 1
+        if nodes > MAX_ARGS_NODES:
+            return [f"{path}: more than {MAX_ARGS_NODES} values"]
+        if depth > MAX_ARGS_DEPTH:
+            return [f"{path}: nested deeper than {MAX_ARGS_DEPTH}"]
+        if value is None or isinstance(value, bool | str) or _is_int(value):
+            continue
+        if isinstance(value, list):
+            stack.extend((item, depth + 1) for item in value)
+        elif isinstance(value, dict):
+            if not all(isinstance(k, str) for k in value):
+                return [f"{path}: non-string key"]
+            stack.extend((item, depth + 1) for item in value.values())
+        else:
+            return [f"{path}: unsupported value (floats are not allowed)"]
+    return []
 
 
 _ID = r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}"

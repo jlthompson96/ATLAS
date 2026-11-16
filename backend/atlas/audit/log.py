@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -56,12 +57,14 @@ from atlas.audit.segments import (
     segment_filename,
     segment_id,
 )
+from atlas.audit.verify import verify_dir
 
 DEFAULT_FLUSH_INTERVAL_S: Final = 30.0
 DEFAULT_FLUSH_BYTES: Final = 64 * 1024
 DEFAULT_CHECKPOINT_EVERY: Final = 1000
 DEFAULT_CHECKPOINT_INTERVAL_S: Final = 3600.0
 DEFAULT_MAX_SEGMENT_BYTES: Final = 16 * 1024 * 1024
+DEFAULT_MIN_FREE_BYTES: Final = 200 * 1024 * 1024  # refuse client records below this much free space
 
 
 class AuditUnavailable(Exception):
@@ -90,6 +93,7 @@ class AuditConfig:
     checkpoint_every: int = DEFAULT_CHECKPOINT_EVERY
     checkpoint_interval_s: float = DEFAULT_CHECKPOINT_INTERVAL_S
     max_segment_bytes: int = DEFAULT_MAX_SEGMENT_BYTES
+    min_free_bytes: int = DEFAULT_MIN_FREE_BYTES
 
 
 @dataclass(frozen=True)
@@ -164,6 +168,11 @@ class AuditLog:
         self._close_active(seal=False)
 
     @property
+    def failed(self) -> bool:
+        """True after an I/O error: the service must exit so systemd restarts it and the log is re-validated."""
+        return self._failed
+
+    @property
     def head(self) -> tuple[int, str]:
         return self._head_seq, self._head_hash
 
@@ -175,6 +184,9 @@ class AuditLog:
 
     def append(self, actor: str, body: dict[str, Any]) -> Appended:
         """Validate a client body and append it. ``actor`` MUST come from the socket peer credentials."""
+        self._ensure_usable()
+        if shutil.disk_usage(self._cfg.data_dir).free < self._cfg.min_free_bytes:
+            raise SubmissionRejected("NO_SPACE", "free space below the configured floor")
         errors = validate_submission(body, actor)
         if errors:
             code = "ACTOR_MISMATCH" if "ACTOR_MISMATCH" in errors else "BAD_RECORD"
@@ -193,33 +205,41 @@ class AuditLog:
 
     def _append_record(self, actor: str, fields: dict[str, Any]) -> Appended:
         self._ensure_usable()
+        record, line = self._prepare(actor, fields)  # nothing is written yet: a bad record never poisons the log
         try:
-            return self._append_unchecked(actor, fields)
-        except SubmissionRejected:
-            raise
+            return self._commit(record, line)
         except Exception:
-            self._failed = True  # fail closed on anything unexpected, including OSError
+            self._failed = True  # an error once the write has started: fail closed until a restart re-validates
             raise
 
     def _append_unchecked(self, actor: str, fields: dict[str, Any]) -> Appended:
-        ts = self._now_ms()
-        record: dict[str, Any] = {
-            **fields,
-            "v": 1,
-            "seq": self._head_seq + 1,
-            "ts": ts,
-            "actor": actor,
-            "prev_hash": self._head_hash,
-        }
-        problems = validate_record({**record, "hash": ZERO_HASH})  # shape first: hashing needs a canonical form
-        if problems:
-            raise SubmissionRejected("BAD_RECORD", "; ".join(problems[:5]))
-        try:
-            record["hash"] = record_hash(record)
-            line = canonicalize(record) + b"\n"
-        except (TypeError, ValueError) as exc:
-            raise SubmissionRejected("BAD_RECORD", str(exc)) from exc
+        record, line = self._prepare(actor, fields)
+        return self._commit(record, line)
 
+    def _prepare(self, actor: str, fields: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
+        """Build, validate, hash and serialize one record. Raises only ``SubmissionRejected`` (no side effects)."""
+        try:
+            ts = self._now_ms()
+            record: dict[str, Any] = {
+                **fields,
+                "v": 1,
+                "seq": self._head_seq + 1,
+                "ts": ts,
+                "actor": actor,
+                "prev_hash": self._head_hash,
+            }
+            problems = validate_record({**record, "hash": ZERO_HASH})  # shape first: hashing needs a canonical form
+            if problems:
+                raise SubmissionRejected("BAD_RECORD", "; ".join(problems[:5]))
+            record["hash"] = record_hash(record)
+            return record, canonicalize(record) + b"\n"
+        except SubmissionRejected:
+            raise
+        except (RecursionError, ValueError, TypeError, KeyError, OverflowError) as exc:
+            raise SubmissionRejected("BAD_RECORD", type(exc).__name__) from exc
+
+    def _commit(self, record: dict[str, Any], line: bytes) -> Appended:
+        ts = record["ts"]
         self._ensure_segment(record["seq"], ts, len(line))
         self._write_all(line)
         self._head_seq = record["seq"]
@@ -267,6 +287,11 @@ class AuditLog:
         if since >= self._cfg.checkpoint_every:
             return True
         return self._monotonic() - self._last_checkpoint_time >= self._cfg.checkpoint_interval_s
+
+    def checkpoint_if_needed(self) -> None:
+        """Sign a checkpoint if any record sits after the last one (used at clean shutdown)."""
+        if self._head_seq > self._last_cp_record_seq:
+            self.checkpoint_now()
 
     def checkpoint_now(self) -> Appended:
         self._ensure_usable()
@@ -401,6 +426,12 @@ class AuditLog:
             if sidecar.is_file() and sidecar.stat().st_size > 0:
                 raise AuditCorrupt("no segments found but the checkpoint sidecar exists: log deleted?")
             return
+        if segments[0][0] > 0:
+            # A chain that does not start at genesis lives on a purge anchor: prove it end to end (signed coverage,
+            # sidecar, tail) before appending to it. Review F1: a forged purge must not be resumed on.
+            report = verify_dir(self._cfg.data_dir, self._key.public_key())
+            if not report.ok:
+                raise AuditCorrupt(f"purged chain does not verify: {report.errors[0]}")
         first_seq, path = segments[-1]
         lines, torn = read_lines(path)
         prev_hash: str | None = None
@@ -435,6 +466,7 @@ class AuditLog:
         if not torn:
             self._reopen_last_segment(path, records[0], len(b"\n".join(lines)) + 1)
         # With a torn tail the file stays as it is (append-only); new records go to a fresh segment.
+        self._cross_check_sidecar(records)
         self._repair_sidecar(records)
         self._last_sync = self._monotonic()
 
@@ -472,6 +504,29 @@ class AuditLog:
                 self._last_cp_to_seq = int(entry["checkpoint"]["to_seq"])
             except (ValueError, KeyError, TypeError) as exc:
                 raise AuditCorrupt("checkpoint sidecar is unreadable") from exc
+
+    def _cross_check_sidecar(self, tail_records: list[dict[str, Any]]) -> None:
+        """Refuse to resume on a chain that disagrees with the checkpoint sidecar (replaced or shortened log)."""
+        path = self._cfg.data_dir / CHECKPOINT_SIDECAR
+        if not path.is_file():
+            if self._head_seq > self._cfg.checkpoint_every:
+                raise AuditCorrupt("checkpoint sidecar is missing but the chain is long: log replaced?")
+            return
+        lines, _ = read_lines(path)
+        if not lines:
+            if self._head_seq > self._cfg.checkpoint_every:
+                raise AuditCorrupt("checkpoint sidecar is empty but the chain is long: log replaced?")
+            return
+        try:
+            entry = parse_record_line(lines[-1])
+            seq, digest = int(entry["seq"]), str(entry["hash"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise AuditCorrupt("checkpoint sidecar is unreadable") from exc
+        if seq > self._head_seq:
+            raise AuditCorrupt(f"checkpoint {seq} is recorded in the sidecar but the chain ends at {self._head_seq}")
+        for rec in tail_records:
+            if rec["seq"] == seq and rec["hash"] != digest:
+                raise AuditCorrupt(f"chain record {seq} differs from the checkpoint recorded in the sidecar")
 
     def _repair_sidecar(self, tail_records: list[dict[str, Any]]) -> None:
         """If a crash fell between a checkpoint reaching the chain and the sidecar, add the missing line."""
@@ -523,6 +578,8 @@ class AuditLog:
             "segments": list(segment_ids),
         }
         result = self._append_record("atlas-audit", {"kind": "purge", "context": "system", "purge": purge})
+        # A purge record is trusted only once a signed checkpoint covers it (verify.py): sign one before any unlink.
+        self.checkpoint_now()
         for sid in segment_ids:
             path = by_id[sid][1]
             self._attrs.unseal(path)

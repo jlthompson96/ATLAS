@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any, Final, NoReturn
 
-SEGMENT_RE: Final = re.compile(r"seg-(\d{10})\.jsonl")
+SEGMENT_RE: Final = re.compile(r"seg-([0-9]{10})\.jsonl")
 SEGMENTS_DIR: Final = "segments"
 CHECKPOINT_SIDECAR: Final = "checkpoints.jsonl"
 PUBLIC_KEY_FILE: Final = "checkpoint.pub"
@@ -76,12 +76,15 @@ def parse_record_line(line: bytes) -> dict[str, Any]:
     """Strict parse: UTF-8, no duplicate keys, no floats, no NaN/Infinity, top level object."""
     if len(line) > MAX_LINE_BYTES:
         raise ValueError("line too long")
-    value = json.loads(
-        line.decode("utf-8"),
-        parse_float=_reject_float,
-        parse_constant=_reject_constant,
-        object_pairs_hook=_no_duplicates,
-    )
+    try:
+        value = json.loads(
+            line.decode("utf-8"),
+            parse_float=_reject_float,
+            parse_constant=_reject_constant,
+            object_pairs_hook=_no_duplicates,
+        )
+    except RecursionError:
+        raise ValueError("nesting too deep") from None
     if not isinstance(value, dict):
         raise ValueError("record is not an object")
     return value
