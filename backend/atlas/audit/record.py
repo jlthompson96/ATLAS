@@ -253,6 +253,8 @@ _EGRESS = _obj(
             "denylisted",
             "kill_switch",
             "method",
+            "malformed_request",
+            "limit",
         ),
         "task_id": _str(_ID),
         "bytes_in": _int(0),

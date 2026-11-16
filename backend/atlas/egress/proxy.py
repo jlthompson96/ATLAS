@@ -99,12 +99,16 @@ class Denied(Exception):
         self.result = result
 
 
+REQUEST_REASONS: Final = {
+    "METHOD_NOT_ALLOWED": "method",
+    "HEADER_TIMEOUT": "limit",
+}  # every other request-shape refusal (bad line, oversized head, too many headers, bad target) is malformed_request
 _TLS_REASONS: Final = {
     "SNI_MISSING": "sni_mismatch",
     "SNI_INVALID": "sni_mismatch",
     "TLS_INVALID": "sni_mismatch",
     "TLS_UNSUPPORTED": "sni_mismatch",
-    "TLS_TIMEOUT": None,
+    "TLS_TIMEOUT": "limit",
 }
 
 
@@ -233,7 +237,7 @@ class EgressProxy:
         if now - self._last_busy_audit.get(caller, -1e9) >= self._limits.busy_audit_interval_s:
             self._last_busy_audit[caller] = now
             record = egress_record(
-                caller, None, None, decision="blocked", status="refused", code="TOO_MANY_CONNECTIONS"
+                caller, None, None, decision="blocked", status="refused", code="TOO_MANY_CONNECTIONS", reason="limit"
             )
             await self._audit_best_effort(record)
         await _close(writer)
@@ -249,7 +253,7 @@ class EgressProxy:
             except RequestError as exc:
                 raise Denied(
                     exc.code,
-                    reason="method" if exc.code == "METHOD_NOT_ALLOWED" else None,
+                    reason=REQUEST_REASONS.get(exc.code, "malformed_request"),
                     status=exc.status,
                     result="refused",
                 ) from None

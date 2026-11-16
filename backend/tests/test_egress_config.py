@@ -178,3 +178,18 @@ def test_public_addresses_are_allowed(address: str) -> None:
 @pytest.mark.parametrize("text", ["", "not-an-ip", "1.2.3", "999.1.1.1", "1.2.3.4.5"])
 def test_unparseable_answers_are_not_addresses(text: str) -> None:
     assert normalize(text) is None
+
+
+def test_every_block_reason_the_proxy_emits_is_in_the_audit_schema() -> None:
+    import json as _json
+
+    from atlas.egress import proxy
+
+    schema = _json.loads(
+        (Path(__file__).resolve().parents[2] / "contracts" / "audit-record.v1.schema.json").read_text()
+    )
+    allowed = set(schema["$defs"]["Egress"]["properties"]["block_reason"]["enum"])
+    emitted = set(proxy.REQUEST_REASONS.values()) | {r for r in proxy._TLS_REASONS.values() if r}
+    emitted |= {"not_allowlisted", "private_address", "sni_mismatch", "malformed_request", "limit", "method"}
+    assert emitted <= allowed
+    assert {"malformed_request", "limit"} <= allowed  # audit-record 1.1.0

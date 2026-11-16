@@ -427,6 +427,7 @@ def test_oversized_head_is_refused(tmp_path: Path) -> None:
             )
             [record] = await env.records_after(1)
             assert record["result"]["code"] == "HEADER_TOO_LARGE"
+            assert record["egress"]["block_reason"] == "malformed_request"
             assert record["egress"]["decision"] == "blocked"
             assert record["egress"]["host"] == "-"  # nothing from an unparsed head is echoed into the audit log
             assert env.upstream.connections == 0
@@ -448,6 +449,7 @@ def test_too_many_headers_is_refused(tmp_path: Path) -> None:
             assert await status_of(reader) == 431
             [record] = await env.records_after(1)
             assert record["result"]["code"] == "TOO_MANY_HEADERS"
+            assert record["egress"]["block_reason"] == "malformed_request"
             writer.close()
 
     run(go())
@@ -466,6 +468,7 @@ def test_slowloris_head_times_out(tmp_path: Path) -> None:
             assert await status_of(reader) in (408, None)
             [record] = await env.records_after(1)
             assert record["result"] == {"status": "refused", "code": "HEADER_TIMEOUT"}
+            assert record["egress"]["block_reason"] == "limit"
             assert env.upstream.connections == 0
             writer.close()
 
@@ -480,6 +483,7 @@ def test_client_that_never_sends_a_hello_times_out(tmp_path: Path) -> None:
             await expect_closed(reader)
             [record] = await env.records_after(1)
             assert record["result"]["code"] == "TLS_TIMEOUT"
+            assert record["egress"]["block_reason"] == "limit"
             assert env.upstream.connections == 0
             writer.close()
 
@@ -495,6 +499,7 @@ def test_bytes_pipelined_before_our_200_are_refused(tmp_path: Path) -> None:
             assert await status_of(reader) == 400
             [record] = await env.records_after(1)
             assert record["result"]["code"] == "BAD_REQUEST"
+            assert record["egress"]["block_reason"] == "malformed_request"
             writer.close()
 
     run(go())
@@ -527,6 +532,7 @@ def test_connection_limit_per_caller_and_busy_audit_is_rate_limited(tmp_path: Pa
             assert await status_of(other_reader) == 200  # another caller's budget is untouched
             records = await env.records_after(1)
             busy = [r for r in records if r["result"].get("code") == "TOO_MANY_CONNECTIONS"]
+            assert all(r["egress"]["block_reason"] == "limit" for r in busy)
             assert len(busy) == 1  # five refusals, one audit record
             other_writer.close()
             for _, w in held:
