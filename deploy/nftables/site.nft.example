@@ -1,0 +1,11 @@
+# Site values for atlas.nft: copy to /etc/atlas/nftables-site.nft and edit (provision-pi.sh does this once).
+# Every address below is a documentation placeholder (RFC 5737). Replace them with your LAN's real values on the Pi.
+# Never commit the edited file.
+
+define LAN_CIDR = 192.0.2.0/24          # the home LAN
+define LAN_BROADCAST = 192.0.2.255      # subnet broadcast (Wake-on-LAN)
+define LAN_DNS = 192.0.2.1              # LAN resolver (router or Pi-side resolver); PLAN 5.7
+define LAN_NTP = 192.0.2.1              # LAN time source; no internet NTP
+define ADMIN_IP = 192.0.2.10            # the development Mac: the only device allowed to SSH in
+define DESKTOP_LAN_IP = 192.0.2.20      # the LLM desktop's LAN address (WireGuard endpoint, UDP 51820)
+define DESKTOP_WG_IP = 10.77.0.2        # the desktop inside the tunnel (contracts/services.md section 2)
