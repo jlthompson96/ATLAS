@@ -3,7 +3,7 @@
 # TEMPLATE: the executable below is a placeholder until this service exists; provision-pi.sh installs but does not enable it.
 #
 # Relaxations of the services.md section 5 baseline (each is also marked RELAXED where it applies):
-#   RestrictAddressFamilies: AF_INET AF_INET6 for the HUD on https://127.0.0.1 (loopback only via IPAddressAllow).
+#   RestrictAddressFamilies: AF_INET for the HUD on https://127.0.0.1 (loopback only via IPAddressAllow).
 #   PrivateDevices=no: Chromium needs the GPU (/dev/dri) and input devices.
 #   MemoryDenyWriteExecute=no: Chromium's JIT needs writable+executable memory.
 
@@ -39,7 +39,7 @@ IPAddressDeny=any
 # RELAXED IPAddressAllow: see the header comment.
 IPAddressAllow=localhost
 # RELAXED RestrictAddressFamilies: see the header comment.
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET
 StateDirectory=atlas/kiosk
 StateDirectoryMode=0700
 
