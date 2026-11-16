@@ -1,6 +1,6 @@
 # Proposal: socket groups for multi-client sockets, reserved names under `/var/lib/atlas`, proxy-client address family
 
-**Target:** `contracts/services.md` (v1.0.0). **Bump:** MINOR (additive clarifications and new names). **Author:** agent C (Pi foundations). **Status:** proposed, implemented provisionally in `deploy/` and checked by `backend/tests/test_deploy_structure.py`.
+**Target:** `contracts/services.md` (v1.0.0). **Bump:** MINOR (additive clarifications and new names). **Author:** agent C (Pi foundations). **Status:** Approved 2026-11-16, applied in services.md 1.1.0 and audit-record.v1 1.1.0 (commit 1944f05).
 
 ## 1. Socket groups cannot always be `atlas-<consumer>`
 

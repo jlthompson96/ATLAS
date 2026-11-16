@@ -153,7 +153,40 @@ ALLOWED_RELAXATIONS: dict[str, set[str]] = {
     "atlas-search": {"MemoryDenyWriteExecute"},
     "atlas-kiosk": {"PrivateDevices", "MemoryDenyWriteExecute"},
 }
-INET_SERVICES = {"atlas-egress", "atlas-ui", "atlas-core", "atlas-kiosk"} | set(md_proxy_ports())
+
+
+def md_family_relaxations() -> dict[str, tuple[set[str], str]]:
+    """service -> (address families it adds, IPAddressAllow description), from the services.md 1.1.0 table."""
+    text = section("**Address-family relaxations**", "**Capabilities:**")
+    out: dict[str, tuple[set[str], str]] = {}
+    for names, adds, allow in re.findall(
+        r"^\| ((?:`atlas-[a-z]+`(?:, )?)+) \| `([A-Z0-9_ ]+)` \| (.+?) \|$", text, flags=re.M
+    ):
+        for name in re.findall(r"`(atlas-[a-z]+)`", names):
+            out[name] = (set(adds.split()), allow)
+    return out
+
+
+def md_capabilities() -> dict[str, str]:
+    text = section("**Capabilities:**", "\n\n")
+    return dict(re.findall(r"`(atlas-[a-z]+)` gets `(CAP_[A-Z_]+)`", text))
+
+
+def md_socket_groups() -> dict[str, str]:
+    text = section("| Socket | Group | Members |", "A group named")
+    return {
+        f"/run/atlas/{sock}": group
+        for sock, group in re.findall(r"^\| `([a-z-]+\.sock)` \| `([a-z-]+)` \|", text, flags=re.M)
+    }
+
+
+def md_reserved_names() -> set[str]:
+    text = section("Reserved names under `/var/lib/atlas/`", "- Each service's runtime")
+    return set(re.findall(r"^  - `([a-z]+)`:", text, flags=re.M))
+
+
+FAMILIES = md_family_relaxations()
+INET_SERVICES = set(FAMILIES)
 
 
 @pytest.mark.parametrize("name", PI_SERVICES)
@@ -185,6 +218,8 @@ def test_network_scope(name: str) -> None:
     assert "AF_UNIX" in families
     inet = families & {"AF_INET", "AF_INET6"}
     assert bool(inet) == (name in INET_SERVICES), f"{name}: IP families {inet}"
+    if name in FAMILIES:
+        assert families == {"AF_UNIX"} | FAMILIES[name][0], f"{name} must have exactly the services.md families"
     if inet:
         assert u.relaxed("RestrictAddressFamilies")
     allow = u.words("IPAddressAllow")
@@ -259,7 +294,8 @@ def test_code_runs_through_the_current_symlink(name: str) -> None:
 @pytest.mark.parametrize("name", PI_SERVICES)
 def test_hardening_extras_and_no_secrets_in_units(name: str) -> None:
     u = unit(name)
-    caps = {"atlas-audit": "CAP_LINUX_IMMUTABLE", "atlas-ui": "CAP_NET_BIND_SERVICE"}
+    caps = md_capabilities()
+    assert caps == {"atlas-audit": "CAP_LINUX_IMMUTABLE", "atlas-ui": "CAP_NET_BIND_SERVICE"}  # table was parsed
     assert u.one("CapabilityBoundingSet") == caps.get(name, "")
     assert u.one("AmbientCapabilities") == (caps.get(name) or None)
     assert u.one("UMask") == "0077"
@@ -289,7 +325,7 @@ def test_egress_unit_specifics() -> None:
 
 # --- socket units --------------------------------------------------------------------------------------
 
-MULTI_CONSUMER_GROUPS = {"/run/atlas/audit.sock": "atlas-audit-clients", "/run/atlas/core.sock": "atlas-core-clients"}
+MULTI_CONSUMER_GROUPS = {p: g for p, g in md_socket_groups().items() if g.endswith("-clients")}
 
 
 def md_audit_writers() -> set[str]:
@@ -544,5 +580,28 @@ def test_release_layout_constants_match_services_md() -> None:
     text = (DEPLOY / "provisioning" / "atlas-release.sh").read_text()
     assert "KEEP=3" in text  # "Keep the last 3 releases"
     assert "/var/lib/atlas" in text and "releases" in text and "current" in text
-    assert "`releases` and `current` are reserved names" in SERVICES_MD
+    assert "`releases`: the versioned releases" in SERVICES_MD
     assert "atlas-releases" not in "".join(PI_SERVICES) and "atlas-current" not in PI_SERVICES
+
+
+def test_socket_group_table_and_reserved_names_were_parsed() -> None:
+    groups = md_socket_groups()
+    assert groups["/run/atlas/audit.sock"] == "atlas-audit-clients"
+    assert groups["/run/atlas/core.sock"] == "atlas-core-clients"
+    assert set(MULTI_CONSUMER_GROUPS) == {"/run/atlas/audit.sock", "/run/atlas/core.sock"}
+    # every socket unit uses exactly the group the table names
+    for path, group in groups.items():
+        stem = "atlas-" + Path(path).stem
+        assert Unit(SYSTEMD / f"{stem}.socket").one("SocketGroup", "Socket") == group
+    assert md_reserved_names() == {"releases", "current", "previous", "incoming", "credentials"}
+    assert not md_reserved_names() & {n.removeprefix("atlas-") for n in PI_SERVICES}
+    release = (DEPLOY / "provisioning" / "atlas-release.sh").read_text()
+    for name in md_reserved_names():
+        assert name in release or name in (DEPLOY / "provisioning" / "provision-pi.sh").read_text()
+
+
+def test_services_md_family_table_was_parsed() -> None:
+    assert FAMILIES["atlas-egress"] == ({"AF_INET", "AF_INET6"}, "`any`")
+    assert FAMILIES["atlas-kiosk"][0] == {"AF_INET"}
+    assert FAMILIES["atlas-core"][0] == {"AF_INET"}
+    assert set(FAMILIES) == {"atlas-egress", "atlas-ui", "atlas-core", "atlas-kiosk"} | set(md_proxy_ports())
