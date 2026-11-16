@@ -62,7 +62,9 @@ table inet atlas {
 
         # DHCP replies, IPv6 neighbour discovery.
         udp sport 67 udp dport 68 accept
-        icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept
+        icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert } accept
+        # Router advertisements only from the configured router: a rogue RA could redirect the Pi's IPv6 traffic.
+        icmpv6 type nd-router-advert ip6 saddr $LAN_ROUTER6 accept
 
         counter drop
     }
@@ -75,6 +77,9 @@ table inet atlas {
         type filter hook output priority filter; policy drop;
 
         # --- loopback: the proxy ports belong to one caller each (services.md section 2) -------------------------
+        # Port squatting: whatever binds a proxy port but is not atlas-egress cannot answer anyone (its replies carry
+        # the proxy port as source port and are dropped), so a squatter cannot impersonate the proxy to a caller.
+        oifname "lo" tcp sport 3131-3136 meta skuid != "atlas-egress" counter drop
         oifname "lo" tcp dport 3131 meta skuid "atlas-google" accept
         oifname "lo" tcp dport 3132 meta skuid "atlas-discord" accept
         oifname "lo" tcp dport 3133 meta skuid "atlas-executor" accept
@@ -85,6 +90,10 @@ table inet atlas {
         # SearXNG (127.0.0.1:8888) is reachable by atlas-egress only; the research API queries it for atlas-research.
         oifname "lo" tcp dport 8888 meta skuid "atlas-egress" accept
         oifname "lo" tcp dport 8888 counter drop
+        # A local caching resolver (127.0.0.53, dnsmasq) forwards to the internet: loopback port 53 is not free either.
+        oifname "lo" meta l4proto { tcp, udp } th dport 53 meta skuid "atlas-egress" accept
+        oifname "lo" meta l4proto { tcp, udp } th dport 53 meta skuid "root" accept
+        oifname "lo" meta l4proto { tcp, udp } th dport 53 counter drop
         oifname "lo" accept
 
         ct state established,related accept
@@ -93,8 +102,8 @@ table inet atlas {
         # --- the Pi's own housekeeping --------------------------------------------------------------------------
         udp sport 68 udp dport 67 accept
         icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit } accept
-        # NTP from the LAN time source only (PLAN 5.7: no internet NTP). Any user: it cannot leave the LAN.
-        ip daddr $LAN_NTP udp dport 123 accept
+        # NTP from the LAN time source only (PLAN 5.7: no internet NTP), and only for the time-sync daemon's user.
+        meta skuid $NTP_USER ip daddr $LAN_NTP udp dport 123 accept
         # DNS: the LAN resolver, for atlas-egress (it resolves allowlisted names itself and pins the answers) and root.
         # No other ATLAS user may resolve names, so DNS cannot carry exfiltrated data.
         meta skuid "atlas-egress" ip daddr $LAN_DNS udp dport 53 accept
@@ -103,7 +112,9 @@ table inet atlas {
         meta skuid "root" ip daddr $LAN_DNS tcp dport 53 accept
 
         # --- WireGuard to the desktop (kernel-originated UDP, no skuid) ---------------------------------------
-        ip daddr $DESKTOP_LAN_IP udp dport 51820 accept
+        # Pinned by fwmark: the tunnel's own packets carry FwMark = $WG_FWMARK (set it in the wg0 config, see the runbook),
+        # so no user process can send to the desktop's WireGuard port.
+        meta mark $WG_FWMARK ip daddr $DESKTOP_LAN_IP udp dport 51820 accept
         # Over the tunnel: atlas-core only, and only LM Studio (1234) and atlas-hostd (8770).
         oifname "wg0" ip daddr $DESKTOP_WG_IP tcp dport { 1234, 8770 } meta skuid "atlas-core" accept
         oifname "wg0" ip daddr $DESKTOP_WG_IP icmp type echo-request meta skuid "atlas-core" accept
@@ -113,7 +124,7 @@ table inet atlas {
 
         # --- THE internet path: atlas-egress, TCP 443, public unicast addresses only ----------------------------
         meta skuid "atlas-egress" tcp dport 443 ip daddr != @nonpublic4 ip daddr != $LAN_CIDR accept
-        meta skuid "atlas-egress" tcp dport 443 ip6 daddr 2000::/3 ip6 daddr != @nonpublic6 accept
+        meta skuid "atlas-egress" tcp dport 443 ip6 daddr 2000::/3 ip6 daddr != @nonpublic6 ip6 daddr != $LAN_PREFIX6 accept
         # PHASE 5, research only (contracts/services.md section 3): TCP 80. Uncomment in the change that ships the
         # research API; the same Unix user serves the CONNECT proxy, which refuses anything but 443 in code.
         # meta skuid "atlas-egress" tcp dport 80 ip daddr != @nonpublic4 ip daddr != $LAN_CIDR accept

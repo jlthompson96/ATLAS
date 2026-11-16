@@ -5,7 +5,7 @@
 # Relaxations of the services.md section 5 baseline (each is also marked RELAXED where it applies):
 #   PrivateDevices=no: audio devices (PipeWire/ALSA).
 #   MemoryMax=1300M: sum of the PLAN 3.1 budgets for wake word + VAD (150 MB), STT (800 MB), TTS (300 MB).
-#   MemoryDenyWriteExecute=no: ONNX Runtime may need it; tighten after measurement (services.md section 5).
+#   TODO(VM): measure whether MemoryDenyWriteExecute=yes works here (JIT or W+X mappings); relax only if measured necessary.
 #   RestrictRealtime=no: real-time audio scheduling.
 
 [Unit]
@@ -37,8 +37,7 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-# RELAXED MemoryDenyWriteExecute: see the header comment.
-MemoryDenyWriteExecute=no
+MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallArchitectures=native
 IPAddressDeny=any

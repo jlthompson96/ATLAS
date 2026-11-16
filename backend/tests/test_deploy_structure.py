@@ -148,10 +148,8 @@ def test_user_group_and_state_directory(name: str) -> None:
 
 # Who may deviate from which baseline directive (services.md section 5 comments + the documented needs of each service).
 ALLOWED_RELAXATIONS: dict[str, set[str]] = {
-    "atlas-voice": {"PrivateDevices", "MemoryDenyWriteExecute"},
-    "atlas-fallback": {"MemoryDenyWriteExecute"},
-    "atlas-search": {"MemoryDenyWriteExecute"},
-    "atlas-kiosk": {"PrivateDevices", "MemoryDenyWriteExecute"},
+    "atlas-voice": {"PrivateDevices"},  # MemoryDenyWriteExecute stays yes until measured (TODO(VM) in the unit)
+    "atlas-kiosk": {"PrivateDevices"},
 }
 
 
@@ -439,7 +437,7 @@ def test_only_atlas_egress_reaches_the_internet() -> None:
 
 
 def test_dns_is_only_for_atlas_egress_and_root_and_only_to_the_lan_resolver() -> None:
-    dns = [ln for ln in chain("output") if "dport 53" in ln]
+    dns = [ln for ln in chain("output") if "dport 53" in ln and not ln.startswith("oifname")]
     assert dns
     assert all("$LAN_DNS" in ln and ('skuid "atlas-egress"' in ln or 'skuid "root"' in ln) for ln in dns)
 

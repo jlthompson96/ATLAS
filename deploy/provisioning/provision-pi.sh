@@ -27,6 +27,7 @@ done
 ATLAS_ADMIN_USER="${ATLAS_ADMIN_USER:-admin}"
 ATLAS_LAN_CIDR="${ATLAS_LAN_CIDR:-192.0.2.0/24}"
 ATLAS_LAN_BROADCAST="${ATLAS_LAN_BROADCAST:-192.0.2.255}"
+ATLAS_LAN_PREFIX6="${ATLAS_LAN_PREFIX6:-2001:db8:1234:5600::/64}" # RFC 3849 placeholder: the LAN's global IPv6 prefix
 BASE=/var/lib/atlas
 SERVICES_CONF="$here/services.conf"
 
@@ -38,6 +39,9 @@ if [ "$DRY_RUN" != "1" ]; then
 fi
 case "$ATLAS_LAN_CIDR$ATLAS_LAN_BROADCAST" in
   *[!0-9./]*) die "ATLAS_LAN_CIDR / ATLAS_LAN_BROADCAST must be plain IPv4 addresses" ;;
+esac
+case "$ATLAS_LAN_PREFIX6" in
+  *[!0-9a-fA-F:/]*) die "ATLAS_LAN_PREFIX6 must be a plain IPv6 prefix such as 2001:db8::/64" ;;
 esac
 
 log "== groups and users"
@@ -70,6 +74,9 @@ write_file /etc/systemd/system/atlas-ui.service.d/lan.conf 644 "[Service]
 IPAddressAllow=$ATLAS_LAN_CIDR"
 write_file /etc/systemd/system/atlas-core.service.d/lan.conf 644 "[Service]
 IPAddressAllow=$ATLAS_LAN_BROADCAST"
+# The proxy refuses connections into the LAN's own prefixes even when they look public (global IPv6 prefix, review F6).
+write_file /etc/systemd/system/atlas-egress.service.d/lan.conf 644 "[Service]
+Environment=ATLAS_EGRESS_LAN_PREFIXES=$ATLAS_LAN_CIDR,$ATLAS_LAN_PREFIX6"
 
 log "== release helper and sudoers"
 install_file "$here/atlas-release.sh" /usr/local/sbin/atlas-release 755
@@ -86,7 +93,6 @@ else
 fi
 
 log "== firewall (nftables)"
-install_file "$deploy_dir/nftables/atlas.nft" /etc/atlas/atlas.nft 644
 site=/etc/atlas/nftables-site.nft
 if [ ! -f "$site" ]; then
   log "create  $site from the placeholder example: EDIT IT, then re-run"
@@ -99,9 +105,31 @@ if [ "$DRY_RUN" != "1" ] && cmp -s "$site" "$deploy_dir/nftables/site.nft.exampl
   log "WARNING: $site still holds the placeholder addresses; the firewall is NOT loaded or enabled yet."
   firewall_ready=0
 fi
-if [ "$firewall_ready" = "1" ]; then
+if [ "$firewall_ready" = "0" ]; then
+  install_file "$deploy_dir/nftables/atlas.nft" /etc/atlas/atlas.nft 644
+else
+  # A changed ruleset is validated BEFORE it replaces the installed one (a bad file must never be what the next boot
+  # loads), the last known-good one is kept for rollback, and the new one is applied now (review F8).
+  nft_changed=0
+  if [ -f /etc/atlas/atlas.nft ] && ! cmp -s "$deploy_dir/nftables/atlas.nft" /etc/atlas/atlas.nft; then
+    nft_changed=1
+  fi
+  if [ ! -f /etc/atlas/atlas.nft ] || [ "$nft_changed" = "1" ]; then
+    run install -m 644 -o root -g root "$deploy_dir/nftables/atlas.nft" /etc/atlas/atlas.nft.new
+    run nft -c -f /etc/atlas/atlas.nft.new
+    if [ "$nft_changed" = "1" ]; then
+      run cp -p /etc/atlas/atlas.nft /etc/atlas/atlas.nft.prev
+    fi
+    run mv -f /etc/atlas/atlas.nft.new /etc/atlas/atlas.nft
+  else
+    log "ok      /etc/atlas/atlas.nft"
+  fi
   run nft -c -f /etc/atlas/atlas.nft
   run systemctl enable --now nftables.service
+  if [ "$nft_changed" = "1" ]; then
+    log "ruleset changed: reloading nftables (previous ruleset kept as /etc/atlas/atlas.nft.prev)"
+    run systemctl reload nftables.service
+  fi
 fi
 
 log "== enable units"

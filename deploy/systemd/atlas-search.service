@@ -6,7 +6,7 @@
 #   RestrictAddressFamilies: AF_INET added to reach the atlas-egress proxy on 127.0.0.1:3136
 #     (the baseline's AF_UNIX-only cannot work for an HTTPS_PROXY client). IPAddressAllow=localhost keeps it
 #     loopback-only; nftables lets only this user connect to its own proxy port.
-#   MemoryDenyWriteExecute=no: the SearXNG runtime (CPython + lxml) is not verified to run with W^X; measure in Phase 5.
+#   TODO(VM): measure whether MemoryDenyWriteExecute=yes works here (JIT or W+X mappings); relax only if measured necessary.
 
 [Unit]
 Description=ATLAS search: Private SearXNG instance
@@ -39,8 +39,7 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-# RELAXED MemoryDenyWriteExecute: see the header comment.
-MemoryDenyWriteExecute=no
+MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallArchitectures=native
 IPAddressDeny=any

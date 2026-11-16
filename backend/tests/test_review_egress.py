@@ -126,7 +126,7 @@ def test_f5_allowed_connections_are_never_suppressed(tmp_path: Path) -> None:
     async def go() -> None:
         limits = Limits(head_timeout_s=1, hello_timeout_s=1, denial_burst=0, denial_rate_per_s=0.0)
         async with environment(tmp_path, limits) as env:
-            reader, writer = await open_tunnel(env, "atlas-google", "gmail.googleapis.com")
+            _reader, writer = await open_tunnel(env, "atlas-google", "gmail.googleapis.com")
             writer.write(client_hello())
             await writer.drain()
             records = await env.records_after(1)
