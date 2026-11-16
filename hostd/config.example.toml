@@ -1,0 +1,38 @@
+# atlas-hostd example configuration. All values are the defaults; addresses come from contracts/services.md.
+# Run:  python -m atlas_hostd config.toml          (service)
+#       python -m atlas_hostd.helper config.toml   (per-user helper, same file)
+# No secrets belong in this file.
+
+# Main listener. `address` must be a concrete address (the wg0 address); 0.0.0.0 and :: are rejected.
+# Requests from any source other than `allowed_source` get 403 FORBIDDEN_SOURCE (in addition to the firewall).
+[listener]
+address = "10.77.0.2"
+port = 8770
+allowed_source = "10.77.0.1"
+
+# Helper listener: always bound to 127.0.0.1 (the address is not configurable), loopback sources only.
+[helper_listener]
+port = 8771
+
+[sleep]
+input_idle_s = 1200               # no keyboard/mouse input for 20 min (PLAN.md section 5.4)
+resume_grace_s = 120              # refuse sleep for 2 min after a resume (avoids flapping)
+sleep_delay_s = 2.0               # reply first, suspend after this delay
+allow_sleep_if_user_woke = false  # opt in to ATLAS sleeping a host the user woke themselves
+foreign_gpu_util_pct = 30         # NVML utilisation at or above this (with no lease) counts as foreign GPU load
+claim_clock_skew_s = 5            # wake-claim tolerance between Pi and desktop clocks
+
+[llm_server]
+port = 1234
+listen_address = "10.77.0.2"
+# Process names hostd looks for (lower-cased; matched against running executables). Override per D15 spike result.
+[llm_server.processes]
+lmstudio = ["lm studio.exe"]
+llmster = ["llmster.exe"]
+llama_server = ["llama-server.exe"]
+
+# Used by atlas-hostd-helper only.
+[helper]
+hostd_port = 8771
+interval_s = 15       # report cadence (contract: every 15 s and on change)
+gpu_heavy_pct = 20    # per-process GPU engine utilisation counted as "heavy"
