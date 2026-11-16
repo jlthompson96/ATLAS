@@ -1,0 +1,426 @@
+openapi: 3.1.0
+info:
+  title: atlas-hostd API
+  version: 1.0.0
+  summary: Pi <-> LLM-host agent (status, sleep, GPU/VRAM report, user activity, keep-awake leases).
+  description: |
+    `atlas-hostd` runs on the Windows desktop as a service (PLAN.md §5.4, §2.8). `atlas-core` on the Pi is its
+    only client. It never initiates connections and has no internet access (outbound blocked by Windows
+    Defender Firewall program rules).
+
+    **Access control (no HTTP-layer credentials; the desktop holds no ATLAS secrets beyond its WireGuard key):**
+    1. The main listener binds to `10.77.0.2:8770` (the `wg0` address) only. It never binds `0.0.0.0`.
+    2. Windows Defender Firewall allows inbound TCP 8770 only from `10.77.0.1` on the WireGuard interface.
+    3. The service itself rejects any request whose source address is not `10.77.0.1` with `403`. That stops
+       local processes on the desktop, which would connect from `10.77.0.2` or loopback.
+    4. Traffic is plain HTTP inside the WireGuard tunnel, which provides encryption and mutual authentication.
+
+    **Helper listener:** the per-user activity helper (started at sign-in) reports to a second listener on
+    `127.0.0.1:8771`, path `/v1/helper/activity`. It accepts loopback connections only. A local process can
+    forge reports, so hostd treats them conservatively: any report of user activity wins over "idle".
+
+    **Sleep policy enforced here (§5.4).** hostd refuses sleep unless *all* host-side conditions hold:
+    no user input for 20 min (configurable), no full-screen app, no foreign GPU load, no active lease, and the
+    current wake cycle was started by ATLAS (or the user opted in to ATLAS sleeping a host they woke).
+    The Pi-side conditions (20 min with no ATLAS LLM request, task queue empty or blocked) are enforced by
+    `atlas-core` before it calls `POST /v1/sleep`.
+
+    **Data minimisation:** hostd reports counts and totals, never names of the user's processes or windows.
+
+    Times are RFC 3339 UTC strings. Versioning rules: contracts/README.md.
+  x-atlas-schema-revision: 1.0.0
+servers:
+  - url: http://10.77.0.2:8770
+    description: Main listener, reachable only through wg0 from the Pi (10.77.0.1).
+  - url: http://127.0.0.1:8771
+    description: Helper listener on the desktop, loopback only. Serves /v1/helper/* only.
+
+tags:
+  - name: status
+  - name: power
+  - name: helper
+
+paths:
+  /v1/health:
+    get:
+      tags: [status]
+      operationId: getHealth
+      summary: Cheap liveness probe.
+      description: Used by the Pi's link check during wake and by health polling (§5.6). Must answer in < 50 ms.
+      responses:
+        "200":
+          description: hostd is running.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/status:
+    get:
+      tags: [status]
+      operationId: getStatus
+      summary: Full host report.
+      responses:
+        "200":
+          description: Current host state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/gpu:
+    get:
+      tags: [status]
+      operationId: getGpu
+      summary: GPU and VRAM report (NVML).
+      description: |
+        Called before each LLM session (D16). The Pi compares `vram_free_mb` (plus whatever the LLM server already
+        holds) with the model's requirement; if it doesn't fit, ATLAS shows HOST: BUSY and queues.
+      responses:
+        "200":
+          description: GPU report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GpuReport" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: NVML unavailable (driver missing or failed).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/activity:
+    get:
+      tags: [status]
+      operationId: getActivity
+      summary: Local user activity as seen by the helper.
+      responses:
+        "200":
+          description: Activity report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActivityReport" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/sleep:
+    post:
+      tags: [power]
+      operationId: requestSleep
+      summary: Ask hostd to put the desktop to sleep.
+      description: |
+        hostd re-checks every host-side condition. On acceptance it replies first, then sleeps after ~2 s using
+        the preferred state (S3 if `powercfg /a` lists it, else Modern Standby; never shutdown). Phase 1 verifies
+        that this sleeps rather than hibernates. Idempotent per `request_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SleepRequest" }
+      responses:
+        "202":
+          description: Accepted; the host will sleep shortly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SleepAccepted" }
+        "409":
+          description: Refused; at least one condition does not hold.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SleepRefused" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/leases/{lease_id}:
+    parameters:
+      - name: lease_id
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/Id" }
+    put:
+      tags: [power]
+      operationId: putLease
+      summary: Create or renew a keep-awake lease.
+      description: |
+        While any lease is active hostd holds a Windows power request (`SetThreadExecutionState` with
+        `ES_SYSTEM_REQUIRED`, not `ES_DISPLAY_REQUIRED`), so Windows' own idle timer can't sleep the PC in the
+        middle of an ATLAS request or research run. The Pi renews well before expiry. Leases do not survive a
+        hostd restart.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LeaseRequest" }
+      responses:
+        "200":
+          description: Lease active.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lease" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    delete:
+      tags: [power]
+      operationId: deleteLease
+      summary: Release a lease.
+      responses:
+        "204": { description: Released (also returned if it did not exist). }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/helper/activity:
+    post:
+      tags: [helper]
+      operationId: postHelperActivity
+      summary: Activity report from the per-user helper (helper listener only).
+      description: Sent every 15 s and on change. hostd treats the helper as disconnected after 45 s of silence.
+      servers:
+        - url: http://127.0.0.1:8771
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HelperReport" }
+      responses:
+        "204": { description: Recorded. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  responses:
+    Forbidden:
+      description: Request did not come from 10.77.0.1 (main listener) or from loopback (helper listener).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: Body failed validation.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Id:
+      type: string
+      pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$"
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code: { type: string, pattern: "^[A-Z][A-Z0-9_]{1,47}$" }
+        message: { type: string, maxLength: 200 }
+
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, api_version, boot_id, uptime_s]
+      properties:
+        status: { const: ok }
+        api_version: { type: string, pattern: "^1\\.[0-9]+\\.[0-9]+$" }
+        boot_id:
+          $ref: "#/components/schemas/Id"
+          description: Changes on every OS boot (not on resume), so the Pi can tell a reboot from a resume.
+        uptime_s: { type: integer, minimum: 0, description: hostd process uptime. }
+
+    Status:
+      type: object
+      additionalProperties: false
+      required: [hostd_version, api_version, boot_id, os, power, llm_server, gpu, activity, leases, sleep_eligibility]
+      properties:
+        hostd_version: { type: string, maxLength: 40 }
+        api_version: { type: string, pattern: "^1\\.[0-9]+\\.[0-9]+$" }
+        boot_id: { $ref: "#/components/schemas/Id" }
+        os:
+          type: object
+          additionalProperties: false
+          required: [name, build]
+          properties:
+            name: { type: string, maxLength: 60, examples: ["Windows 11 Pro"] }
+            build: { type: string, maxLength: 40 }
+        power: { $ref: "#/components/schemas/PowerInfo" }
+        llm_server: { $ref: "#/components/schemas/LlmServerInfo" }
+        gpu:
+          description: Null if NVML is unavailable.
+          oneOf:
+            - $ref: "#/components/schemas/GpuReport"
+            - type: "null"
+        activity: { $ref: "#/components/schemas/ActivityReport" }
+        leases:
+          type: array
+          maxItems: 16
+          items: { $ref: "#/components/schemas/Lease" }
+        sleep_eligibility:
+          type: object
+          additionalProperties: false
+          required: [eligible, reasons]
+          properties:
+            eligible: { type: boolean, description: Host-side conditions only; a SleepRequest may still be refused for not_atlas_woken. }
+            reasons:
+              type: array
+              uniqueItems: true
+              items: { $ref: "#/components/schemas/RefusalReason" }
+
+    PowerInfo:
+      type: object
+      additionalProperties: false
+      required: [sleep_states_available, preferred_sleep_state, last_resume_at, last_wake_source]
+      properties:
+        sleep_states_available:
+          type: array
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/SleepState" }
+          description: From `powercfg /a`.
+        preferred_sleep_state: { $ref: "#/components/schemas/SleepState" }
+        last_resume_at:
+          description: Last resume from sleep or hibernate since boot; null if none.
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: "null" }
+        last_wake_source:
+          description: Windows-reported source of the last resume, generalised (no device names).
+          oneOf:
+            - enum: [network, power_button, input_device, timer, unknown]
+            - { type: "null" }
+
+    SleepState:
+      enum: [s3, modern_standby, hibernate]
+
+    LlmServerInfo:
+      type: object
+      additionalProperties: false
+      required: [kind, running, port_listening]
+      properties:
+        kind:
+          enum: [lmstudio, llmster, llama_server, none]
+          description: Which LLM server process hostd found (D15 spike decides which runs at boot).
+        running: { type: boolean }
+        port_listening: { type: boolean, description: "TCP 1234 is listening on 10.77.0.2. Not proof of readiness; the Pi's 1-token warm-up is (§5.4)." }
+
+    GpuReport:
+      type: object
+      additionalProperties: false
+      required: [name, driver_version, vram_total_mb, vram_used_mb, vram_free_mb, util_pct, temp_c, throttling, llm_server_vram_mb, foreign_vram_mb, foreign_process_count, sampled_at]
+      properties:
+        name: { type: string, maxLength: 80 }
+        driver_version: { type: string, maxLength: 40 }
+        vram_total_mb: { type: integer, minimum: 0 }
+        vram_used_mb: { type: integer, minimum: 0 }
+        vram_free_mb: { type: integer, minimum: 0 }
+        util_pct: { type: integer, minimum: 0, maximum: 100 }
+        temp_c: { type: integer }
+        throttling:
+          type: array
+          uniqueItems: true
+          items: { enum: [thermal, power, other] }
+          description: Empty when not throttling. Generalised from NVML clock-throttle reasons.
+        llm_server_vram_mb: { type: integer, minimum: 0, description: VRAM held by the LLM server process(es). }
+        foreign_vram_mb: { type: integer, minimum: 0, description: VRAM held by every other process. }
+        foreign_process_count: { type: integer, minimum: 0 }
+        sampled_at: { type: string, format: date-time }
+
+    ActivityReport:
+      type: object
+      additionalProperties: false
+      required: [user_signed_in, helper_connected, input_idle_s, fullscreen_app, foreign_gpu_busy, reported_at]
+      properties:
+        user_signed_in: { type: boolean }
+        helper_connected: { type: boolean, description: "False when nobody is signed in or the helper died. Then user activity counts as none (§5.4)." }
+        input_idle_s:
+          description: Seconds since the last keyboard/mouse input; null when the helper is not connected.
+          oneOf:
+            - { type: integer, minimum: 0 }
+            - { type: "null" }
+        fullscreen_app: { type: boolean }
+        foreign_gpu_busy: { type: boolean, description: A non-LLM process is using the GPU heavily (threshold set in hostd config). }
+        reported_at:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: "null" }
+
+    SleepRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, reason, atlas_idle_s, wake]
+      properties:
+        request_id: { $ref: "#/components/schemas/Id" }
+        reason: { enum: [idle, queue_drained, speculative_unused] }
+        atlas_idle_s: { type: integer, minimum: 0, description: Seconds since the last ATLAS LLM request (informational; the Pi enforces the 20 min rule). }
+        wake:
+          description: The ATLAS wake that started this cycle, or null if ATLAS did not wake the host.
+          oneOf:
+            - $ref: "#/components/schemas/WakeClaim"
+            - type: "null"
+
+    WakeClaim:
+      type: object
+      additionalProperties: false
+      required: [wake_id, first_packet_at]
+      properties:
+        wake_id: { $ref: "#/components/schemas/Id" }
+        first_packet_at:
+          type: string
+          format: date-time
+          description: |
+            When the Pi sent the first magic packet. hostd accepts the claim only if the last resume happened after
+            this time (minus 5 s clock skew) and `last_wake_source` is `network` or `unknown`.
+
+    SleepAccepted:
+      type: object
+      additionalProperties: false
+      required: [request_id, accepted, sleep_state, sleep_at]
+      properties:
+        request_id: { $ref: "#/components/schemas/Id" }
+        accepted: { const: true }
+        sleep_state: { $ref: "#/components/schemas/SleepState" }
+        sleep_at: { type: string, format: date-time }
+
+    SleepRefused:
+      type: object
+      additionalProperties: false
+      required: [request_id, accepted, reasons]
+      properties:
+        request_id: { $ref: "#/components/schemas/Id" }
+        accepted: { const: false }
+        reasons:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/RefusalReason" }
+
+    RefusalReason:
+      enum:
+        - user_input_recent      # input within the idle window
+        - fullscreen_app
+        - foreign_gpu_busy
+        - lease_active
+        - not_atlas_woken        # wake claim missing or inconsistent, and the user has not opted in
+        - sleep_unsupported      # no usable sleep state (would require shutdown)
+        - resume_grace           # resumed < 2 min ago (avoids sleep/wake flapping)
+
+    LeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [ttl_s, reason]
+      properties:
+        ttl_s: { type: integer, minimum: 30, maximum: 1800 }
+        reason: { enum: [interactive_session, research_run, model_warmup, keep_awake_schedule, backup] }
+
+    Lease:
+      type: object
+      additionalProperties: false
+      required: [lease_id, reason, expires_at]
+      properties:
+        lease_id: { $ref: "#/components/schemas/Id" }
+        reason: { enum: [interactive_session, research_run, model_warmup, keep_awake_schedule, backup] }
+        expires_at: { type: string, format: date-time }
+
+    HelperReport:
+      type: object
+      additionalProperties: false
+      required: [session_id, input_idle_s, fullscreen_app, gpu_heavy_process_count, reported_at]
+      properties:
+        session_id: { type: integer, minimum: 0, description: Windows session ID of the signed-in user. }
+        input_idle_s: { type: integer, minimum: 0, description: From GetLastInputInfo. }
+        fullscreen_app: { type: boolean }
+        gpu_heavy_process_count: { type: integer, minimum: 0 }
+        reported_at: { type: string, format: date-time }

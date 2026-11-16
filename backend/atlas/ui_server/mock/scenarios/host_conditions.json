@@ -1,0 +1,43 @@
+{
+  "name": "host_conditions",
+  "description": "Degraded modes from §5.6: HOST DEGRADED, HOST BUSY (VRAM), LINK DOWN, SIGNED OUT, VOICE UNAVAILABLE + thermal throttle, then recovery.",
+  "setup": [
+    { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 12, "ram_pct": 41, "temp_c": 58.5, "disk_write_mb_24h": 37.2 },
+      "llm": { "power": "up", "link": "up", "service": "ready", "gpu": { "util_pct": 4, "vram_used_mb": 6400, "vram_total_mb": 8192, "temp_c": 45 }, "model_loaded": "qwen3.5-9b-q4_k_m" },
+      "voice": { "status": "ok", "wake_word": "active" } } }
+  ],
+  "steps": [
+    { "at": 1000, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 14, "ram_pct": 41, "temp_c": 58.9, "disk_write_mb_24h": 37.2 },
+      "llm": { "power": "up", "link": "up", "service": "degraded", "gpu": { "util_pct": 97, "vram_used_mb": 6900, "vram_total_mb": 8192, "temp_c": 83 }, "model_loaded": "qwen3.5-9b-q4_k_m" },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 1000, "emit": { "type": "alert", "payload": { "alert_id": "al-hc-1", "level": "warn", "code": "HOST_DEGRADED", "message": "Core is slow (3 slow responses in a row)." } } },
+    { "at": 5000, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 13, "ram_pct": 41, "temp_c": 58.7, "disk_write_mb_24h": 37.3 },
+      "llm": { "power": "up", "link": "up", "service": "busy", "gpu": { "util_pct": 99, "vram_used_mb": 7900, "vram_total_mb": 8192, "temp_c": 79 } },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 5000, "emit": { "type": "alert", "payload": { "alert_id": "al-hc-2", "level": "info", "code": "HOST_BUSY", "message": "Your GPU is busy. Simple commands still work; the rest is queued." } } },
+    { "at": 9000, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 11, "ram_pct": 40, "temp_c": 58.1, "disk_write_mb_24h": 37.3 },
+      "llm": { "power": "unknown", "link": "down", "service": "unknown" },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 9000, "emit": { "type": "state.changed", "payload": { "state": "llm_unreachable", "code": "LINK_DOWN" } } },
+    { "at": 13000, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 11, "ram_pct": 40, "temp_c": 58.0, "disk_write_mb_24h": 37.3 },
+      "llm": { "power": "up", "link": "up", "service": "signed_out" },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 13000, "emit": { "type": "state.changed", "payload": { "state": "llm_unreachable", "code": "SIGNED_OUT", "detail": "sign in on the desktop" } } },
+    { "at": 17000, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 71, "ram_pct": 48, "temp_c": 76.2, "disk_write_mb_24h": 37.4, "throttled": true },
+      "llm": { "power": "up", "link": "up", "service": "signed_out" },
+      "voice": { "status": "unavailable", "wake_word": "off" } } } },
+    { "at": 17000, "emit": { "type": "alert", "payload": { "alert_id": "al-hc-3", "level": "warn", "code": "VOICE_UNAVAILABLE", "message": "Microphone not detected. Type below." } } },
+    { "at": 17000, "emit": { "type": "alert", "payload": { "alert_id": "al-hc-4", "level": "warn", "code": "PI_THERMAL", "message": "Pi at 76 °C. Display switched to lite mode; research paused." } } },
+    { "at": 22000, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 12, "ram_pct": 41, "temp_c": 61.0, "disk_write_mb_24h": 37.5 },
+      "llm": { "power": "up", "link": "up", "service": "ready", "gpu": { "util_pct": 2, "vram_used_mb": 6400, "vram_total_mb": 8192, "temp_c": 44 }, "model_loaded": "qwen3.5-9b-q4_k_m" },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 22000, "emit": { "type": "state.changed", "payload": { "state": "idle" } } }
+  ]
+}

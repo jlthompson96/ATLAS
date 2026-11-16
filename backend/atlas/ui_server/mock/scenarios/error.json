@@ -1,0 +1,17 @@
+{
+  "name": "error",
+  "description": "Typed request fails at the LLM (token rotated, FI-7): thinking -> error (300 ms flash, then dim) -> idle after 5 s.",
+  "setup": [
+    { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 10, "ram_pct": 40, "temp_c": 57.9, "disk_write_mb_24h": 37.0 },
+      "llm": { "power": "up", "link": "up", "service": "ready", "model_loaded": "qwen3.5-9b-q4_k_m" },
+      "voice": { "status": "ok", "wake_word": "active" } } }
+  ],
+  "steps": [
+    { "at": 1000, "emit": { "type": "transcript.final", "payload": { "utterance_id": "u1", "role": "user", "text": "Plan my week", "source": "text" } } },
+    { "at": 1000, "emit": { "type": "state.changed", "payload": { "state": "thinking" } } },
+    { "at": 2200, "emit": { "type": "state.changed", "payload": { "state": "error", "code": "LLM_AUTH_FAILED", "detail": "core rejected the API token" } } },
+    { "at": 2200, "emit": { "type": "alert", "payload": { "alert_id": "al-auth-1", "level": "critical", "code": "LLM_AUTH_FAILED", "message": "LM Studio returned 401. Check the API token (theft runbook if unexpected)." } } },
+    { "at": 7200, "emit": { "type": "state.changed", "payload": { "state": "idle" } } }
+  ]
+}

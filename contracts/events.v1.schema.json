@@ -1,0 +1,812 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:atlas:contracts:events:v1",
+  "title": "ATLAS backend <-> HUD event stream, v1",
+  "description": "Every WebSocket text frame on /ws/events is one JSON envelope. Validate server->client frames against #/$defs/ServerMessage and client->server frames against #/$defs/ClientMessage. Source: PLAN.md §4.5. Versioning rules: contracts/README.md.",
+  "x-atlas-schema-revision": "1.0.0",
+  "oneOf": [
+    { "$ref": "#/$defs/ServerMessage" },
+    { "$ref": "#/$defs/ClientMessage" }
+  ],
+  "$defs": {
+
+    "Envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "type", "seq", "ts", "payload"],
+      "properties": {
+        "v": { "const": 1 },
+        "type": { "type": "string" },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Strictly increasing per connection and per direction. A receiver that sees a gap sends sync.request (client) or ignores it (server)."
+        },
+        "ts": { "$ref": "#/$defs/EpochMs", "description": "Sender's wall clock, epoch ms. For client frames this is unsynced and informational only." },
+        "payload": { "type": "object" }
+      }
+    },
+
+    "ServerMessage": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "state.changed", "audio.level", "transcript.partial", "transcript.final",
+                "assistant.delta", "panel.update", "host.status", "task.progress",
+                "action.pending", "action.resolved", "alert", "privacy.mode",
+                "clock.pong", "sync.snapshot", "stepup.granted", "request.result"
+              ]
+            }
+          }
+        },
+        { "if": { "properties": { "type": { "const": "state.changed" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/StateChanged" } } } },
+        { "if": { "properties": { "type": { "const": "audio.level" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/AudioLevel" } } } },
+        { "if": { "properties": { "type": { "const": "transcript.partial" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/Transcript" } } } },
+        { "if": { "properties": { "type": { "const": "transcript.final" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/Transcript" } } } },
+        { "if": { "properties": { "type": { "const": "assistant.delta" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/AssistantDelta" } } } },
+        { "if": { "properties": { "type": { "const": "panel.update" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/PanelUpdate" } } } },
+        { "if": { "properties": { "type": { "const": "host.status" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/HostStatus" } } } },
+        { "if": { "properties": { "type": { "const": "task.progress" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskProgress" } } } },
+        { "if": { "properties": { "type": { "const": "action.pending" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ActionPending" } } } },
+        { "if": { "properties": { "type": { "const": "action.resolved" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ActionResolved" } } } },
+        { "if": { "properties": { "type": { "const": "alert" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/Alert" } } } },
+        { "if": { "properties": { "type": { "const": "privacy.mode" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/PrivacyMode" } } } },
+        { "if": { "properties": { "type": { "const": "clock.pong" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ClockPong" } } } },
+        { "if": { "properties": { "type": { "const": "sync.snapshot" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SyncSnapshot" } } } },
+        { "if": { "properties": { "type": { "const": "stepup.granted" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/StepupGranted" } } } },
+        { "if": { "properties": { "type": { "const": "request.result" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/RequestResult" } } } }
+      ]
+    },
+
+    "ClientMessage": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "text.input", "ptt.start", "ptt.stop", "action.decide", "task.kill",
+                "killswitch.all", "privacy.set", "portfolio.unlock", "layout.save",
+                "clock.ping", "sync.request", "stepup.verify"
+              ]
+            }
+          }
+        },
+        { "if": { "properties": { "type": { "const": "text.input" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TextInput" } } } },
+        { "if": { "properties": { "type": { "const": "ptt.start" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/Empty" } } } },
+        { "if": { "properties": { "type": { "const": "ptt.stop" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/Empty" } } } },
+        { "if": { "properties": { "type": { "const": "action.decide" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ActionDecide" } } } },
+        { "if": { "properties": { "type": { "const": "task.kill" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/TaskKill" } } } },
+        { "if": { "properties": { "type": { "const": "killswitch.all" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/Empty" } } } },
+        { "if": { "properties": { "type": { "const": "privacy.set" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/PrivacySet" } } } },
+        { "if": { "properties": { "type": { "const": "portfolio.unlock" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/PortfolioUnlock" } } } },
+        { "if": { "properties": { "type": { "const": "layout.save" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/LayoutSave" } } } },
+        { "if": { "properties": { "type": { "const": "clock.ping" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ClockPing" } } } },
+        { "if": { "properties": { "type": { "const": "sync.request" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SyncRequest" } } } },
+        { "if": { "properties": { "type": { "const": "stepup.verify" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/StepupVerify" } } } }
+      ]
+    },
+
+    "EpochMs": { "type": "integer", "minimum": 0, "description": "Milliseconds since the Unix epoch, server clock unless stated." },
+    "Id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$" },
+    "Sha256Hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "Code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,47}$", "description": "Machine-readable reason, e.g. WAKE_FAILED. Catalogue: contracts/README.md." },
+    "Decimal": { "type": "string", "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]{1,8})?$", "description": "Money and prices are decimal strings, never JSON numbers (computed with Python Decimal on the Pi, §2.16)." },
+    "Pct": { "type": "number", "minimum": 0, "maximum": 100 },
+    "SignedPct": { "type": "number", "minimum": -1000, "maximum": 100000 },
+    "ShortText": { "type": "string", "maxLength": 200 },
+    "UntrustedText": {
+      "type": "string",
+      "maxLength": 500,
+      "x-atlas-untrusted": true,
+      "description": "Derived from third-party content (email, Discord, calendar, web). The HUD MUST render it as plain text only: never as HTML or Markdown, never as a link target or image source."
+    },
+    "Date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "Symbol": { "type": "string", "pattern": "^[A-Z0-9.^-]{1,12}$" },
+
+    "State": {
+      "enum": ["idle", "listening", "thinking", "speaking", "waking_host", "error", "llm_unreachable"],
+      "description": "Orb state (§4.3). 'idle' and 'llm_unreachable' are the two resting states: the server returns to llm_unreachable instead of idle while the core is offline.",
+      "x-atlas-state-transitions": {
+        "idle": ["listening", "thinking", "waking_host", "llm_unreachable"],
+        "listening": ["thinking", "waking_host", "idle", "llm_unreachable", "error"],
+        "thinking": ["speaking", "idle", "llm_unreachable", "error", "waking_host"],
+        "speaking": ["idle", "llm_unreachable", "listening", "error"],
+        "waking_host": ["waking_host", "thinking", "error"],
+        "error": ["idle", "llm_unreachable"],
+        "llm_unreachable": ["llm_unreachable", "idle", "listening", "thinking", "waking_host"]
+      }
+    },
+    "WakeStage": { "enum": ["packet", "link", "api", "model"], "description": "Wake stages in order (§5.4). Within one waking_host episode the stage never goes backwards." },
+
+    "StateChanged": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "$ref": "#/$defs/State" },
+        "detail": { "type": "string", "maxLength": 80, "description": "Short human text shown after the label, e.g. ERROR: <detail>." },
+        "code": { "$ref": "#/$defs/Code" },
+        "wake": { "$ref": "#/$defs/WakeProgress" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "waking_host" } } },
+          "then": { "required": ["wake"] },
+          "else": { "not": { "required": ["wake"] } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "error" } } },
+          "then": { "required": ["code", "detail"] }
+        },
+        {
+          "if": { "properties": { "state": { "const": "llm_unreachable" } } },
+          "then": {
+            "required": ["code"],
+            "properties": { "code": { "enum": ["CORE_UNREACHABLE", "LINK_DOWN", "SIGNED_OUT", "WAKE_FAILED"] } }
+          }
+        }
+      ]
+    },
+    "WakeProgress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "elapsed_ms", "deadline_ms"],
+      "properties": {
+        "stage": { "$ref": "#/$defs/WakeStage" },
+        "elapsed_ms": { "type": "integer", "minimum": 0 },
+        "deadline_ms": { "type": "integer", "minimum": 1000, "maximum": 300000, "description": "60000 for interactive wakes, 120000 for unattended (§5.4, §5.5)." }
+      }
+    },
+
+    "AudioLevel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stream", "t_play", "frame_ms", "levels"],
+      "properties": {
+        "stream": { "enum": ["tts", "mic"] },
+        "t_play": {
+          "type": "number",
+          "minimum": 0,
+          "description": "tts: server-clock epoch ms at which levels[0] becomes audible; batches are sent >= 100 ms ahead of t_play (§4.4). mic: server-clock capture time of levels[0]."
+        },
+        "frame_ms": { "const": 16 },
+        "levels": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "number", "minimum": 0, "maximum": 1 } }
+      }
+    },
+
+    "SourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": { "enum": ["user", "email", "discord", "calendar", "web", "memory", "market", "system"] },
+        "ref": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Resource ID, e.g. gmail:msg/18c2f..., web:src/42." },
+        "label": { "$ref": "#/$defs/UntrustedText" }
+      }
+    },
+    "Provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tainted", "sources"],
+      "properties": {
+        "tainted": { "type": "boolean", "description": "True when any input came from untrusted content. The HUD MUST show a visible provenance flag (§8.3)." },
+        "sources": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/SourceRef" } }
+      }
+    },
+
+    "Transcript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["utterance_id", "role", "text", "source"],
+      "properties": {
+        "utterance_id": { "$ref": "#/$defs/Id" },
+        "role": { "enum": ["user", "assistant"] },
+        "text": { "type": "string", "maxLength": 4000 },
+        "source": { "enum": ["voice", "text"], "description": "user: how the input arrived. assistant: whether the reply was spoken or text-only." },
+        "provenance": { "$ref": "#/$defs/Provenance" }
+      }
+    },
+    "AssistantDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["utterance_id", "text"],
+      "properties": {
+        "utterance_id": { "$ref": "#/$defs/Id" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 1000 }
+      }
+    },
+
+    "DataPanelId": {
+      "enum": ["weather", "egress_audit", "digest", "email", "discord", "calendar", "markets", "portfolio"],
+      "description": "Panels fed by panel.update. Other panels are derived client-side: clock (synced server time), system and host (host.status), pending (action.*), research (task.progress), transcript (transcript.*, assistant.delta)."
+    },
+    "LayoutPanelId": {
+      "enum": ["clock", "weather", "system", "host", "egress_audit", "pending", "research", "digest", "email", "discord", "calendar", "markets", "portfolio", "transcript"]
+    },
+
+    "PanelUpdate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["panel_id", "sensitivity", "redacted", "updated_at", "data"],
+      "properties": {
+        "panel_id": { "$ref": "#/$defs/DataPanelId" },
+        "sensitivity": { "enum": ["public", "personal", "secret"], "description": "Fixed per panel (§4.6); enforced below." },
+        "redacted": { "type": "boolean", "description": "True when the server has applied privacy-mode redaction for this device; data then uses the panel's redacted shape." },
+        "updated_at": { "$ref": "#/$defs/EpochMs" },
+        "stale_since": { "$ref": "#/$defs/EpochMs", "description": "Present when the source is failing and data is the last good copy (e.g. FI-12)." },
+        "data": { "type": "object" }
+      },
+      "allOf": [
+        { "if": { "properties": { "panel_id": { "const": "weather" } } },
+          "then": { "properties": { "sensitivity": { "const": "public" }, "redacted": { "const": false }, "data": { "$ref": "#/$defs/WeatherData" } } } },
+        { "if": { "properties": { "panel_id": { "const": "egress_audit" } } },
+          "then": { "properties": { "sensitivity": { "const": "public" }, "redacted": { "const": false }, "data": { "$ref": "#/$defs/EgressAuditData" } } } },
+        { "if": { "properties": { "panel_id": { "const": "markets" } } },
+          "then": { "properties": { "sensitivity": { "const": "personal" }, "redacted": { "const": false }, "data": { "$ref": "#/$defs/MarketsData" } } } },
+        { "if": { "properties": { "panel_id": { "const": "digest" } } },
+          "then": { "properties": { "sensitivity": { "const": "personal" } },
+                    "if": { "properties": { "redacted": { "const": true } } },
+                    "then": { "properties": { "data": { "$ref": "#/$defs/HiddenRedacted" } } },
+                    "else": { "properties": { "data": { "$ref": "#/$defs/DigestData" } } } } },
+        { "if": { "properties": { "panel_id": { "const": "email" } } },
+          "then": { "properties": { "sensitivity": { "const": "secret" } },
+                    "if": { "properties": { "redacted": { "const": true } } },
+                    "then": { "properties": { "data": { "$ref": "#/$defs/CountRedacted" } } },
+                    "else": { "properties": { "data": { "$ref": "#/$defs/EmailData" } } } } },
+        { "if": { "properties": { "panel_id": { "const": "discord" } } },
+          "then": { "properties": { "sensitivity": { "const": "secret" } },
+                    "if": { "properties": { "redacted": { "const": true } } },
+                    "then": { "properties": { "data": { "$ref": "#/$defs/CountRedacted" } } },
+                    "else": { "properties": { "data": { "$ref": "#/$defs/DiscordData" } } } } },
+        { "if": { "properties": { "panel_id": { "const": "calendar" } } },
+          "then": { "properties": { "sensitivity": { "const": "secret" } },
+                    "if": { "properties": { "redacted": { "const": true } } },
+                    "then": { "properties": { "data": { "$ref": "#/$defs/CalendarRedacted" } } },
+                    "else": { "properties": { "data": { "$ref": "#/$defs/CalendarData" } } } } },
+        { "if": { "properties": { "panel_id": { "const": "portfolio" } } },
+          "then": { "properties": { "sensitivity": { "const": "secret" } },
+                    "if": { "properties": { "redacted": { "const": true } } },
+                    "then": { "properties": { "data": { "$ref": "#/$defs/PortfolioRedacted" } } },
+                    "else": { "properties": { "data": { "$ref": "#/$defs/PortfolioData" } } } } }
+      ]
+    },
+
+    "HiddenRedacted": { "type": "object", "additionalProperties": false, "properties": {}, "description": "Panel is hidden in privacy mode." },
+    "CountRedacted": {
+      "type": "object", "additionalProperties": false, "required": ["unread"],
+      "properties": { "unread": { "type": "integer", "minimum": 0 } },
+      "description": "Count only in privacy mode."
+    },
+
+    "WeatherData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["temp_c", "condition_code", "condition", "high_c", "low_c", "attribution"],
+      "properties": {
+        "location_label": { "type": "string", "maxLength": 40 },
+        "temp_c": { "type": "number" },
+        "feels_like_c": { "type": "number" },
+        "condition_code": { "type": "integer", "minimum": 0, "maximum": 99, "description": "WMO weather interpretation code, as returned by Open-Meteo." },
+        "condition": { "type": "string", "maxLength": 40 },
+        "high_c": { "type": "number" },
+        "low_c": { "type": "number" },
+        "precip_prob_pct": { "$ref": "#/$defs/Pct" },
+        "wind_kph": { "type": "number", "minimum": 0 },
+        "hourly": {
+          "type": "array", "maxItems": 24,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["t", "temp_c", "condition_code"],
+            "properties": { "t": { "$ref": "#/$defs/EpochMs" }, "temp_c": { "type": "number" }, "condition_code": { "type": "integer", "minimum": 0, "maximum": 99 } }
+          }
+        },
+        "attribution": { "const": "Weather data by Open-Meteo.com (CC BY 4.0)", "description": "Required by Open-Meteo's licence (§2.15). The panel must display it." }
+      }
+    },
+
+    "EgressAuditData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["egress", "audit"],
+      "properties": {
+        "egress": {
+          "type": "object", "additionalProperties": false, "required": ["proxy", "allowed_24h", "blocked_24h"],
+          "properties": {
+            "proxy": { "enum": ["up", "down"] },
+            "allowed_24h": { "type": "integer", "minimum": 0 },
+            "blocked_24h": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "audit": {
+          "type": "object", "additionalProperties": false, "required": ["chain", "records_24h"],
+          "properties": {
+            "chain": { "enum": ["ok", "broken", "unverified"], "description": "PT-13: 'broken' must render as a clear failure (✗)." },
+            "records_24h": { "type": "integer", "minimum": 0 },
+            "last_verified_at": { "$ref": "#/$defs/EpochMs" },
+            "last_checkpoint_at": { "$ref": "#/$defs/EpochMs" }
+          }
+        }
+      }
+    },
+
+    "DigestData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "items"],
+      "properties": {
+        "date": { "$ref": "#/$defs/Date" },
+        "items": {
+          "type": "array", "maxItems": 20,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["kind", "title"],
+            "properties": {
+              "kind": { "enum": ["research", "wake_failure", "market", "alert", "reauth", "actions"] },
+              "title": { "type": "string", "maxLength": 120 },
+              "level": { "enum": ["info", "warn", "critical"] },
+              "ref": { "$ref": "#/$defs/Id" }
+            }
+          }
+        }
+      }
+    },
+
+    "AuthStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["ok", "expiring", "expired", "missing"], "description": "'expiring' from 24 h before expiry (weekly re-authorization, §2.10)." },
+        "expires_at": { "$ref": "#/$defs/EpochMs" }
+      }
+    },
+
+    "EmailData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unread", "auth", "items"],
+      "properties": {
+        "unread": { "type": "integer", "minimum": 0 },
+        "auth": { "$ref": "#/$defs/AuthStatus" },
+        "items": {
+          "type": "array", "maxItems": 25,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "from_display", "from_domain", "subject", "received_at", "unread"],
+            "properties": {
+              "id": { "$ref": "#/$defs/Id" },
+              "from_display": { "$ref": "#/$defs/UntrustedText" },
+              "from_domain": { "type": "string", "maxLength": 253 },
+              "subject": { "$ref": "#/$defs/UntrustedText" },
+              "received_at": { "$ref": "#/$defs/EpochMs" },
+              "unread": { "type": "boolean" },
+              "flags": { "type": "array", "maxItems": 4, "uniqueItems": true, "items": { "enum": ["new_sender", "suspicious"] } }
+            }
+          }
+        }
+      }
+    },
+
+    "DiscordData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unread", "items"],
+      "properties": {
+        "unread": { "type": "integer", "minimum": 0 },
+        "items": {
+          "type": "array", "maxItems": 25,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "channel", "author_display", "at"],
+            "properties": {
+              "id": { "$ref": "#/$defs/Id" },
+              "channel": { "$ref": "#/$defs/UntrustedText" },
+              "author_display": { "$ref": "#/$defs/UntrustedText" },
+              "excerpt": { "$ref": "#/$defs/UntrustedText" },
+              "at": { "$ref": "#/$defs/EpochMs" }
+            }
+          }
+        }
+      }
+    },
+
+    "CalendarData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "events"],
+      "properties": {
+        "auth": { "$ref": "#/$defs/AuthStatus" },
+        "events": {
+          "type": "array", "maxItems": 20,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "title", "start", "end", "all_day"],
+            "properties": {
+              "id": { "$ref": "#/$defs/Id" },
+              "title": { "$ref": "#/$defs/UntrustedText" },
+              "start": { "$ref": "#/$defs/EpochMs" },
+              "end": { "$ref": "#/$defs/EpochMs" },
+              "all_day": { "type": "boolean" },
+              "location": { "$ref": "#/$defs/UntrustedText" }
+            }
+          }
+        }
+      }
+    },
+    "CalendarRedacted": {
+      "type": "object", "additionalProperties": false, "required": ["next_event_start"],
+      "properties": { "next_event_start": { "oneOf": [{ "$ref": "#/$defs/EpochMs" }, { "type": "null" }] } },
+      "description": "Next event's time only in privacy mode (§4.6)."
+    },
+
+    "Quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "price", "change_pct", "as_of", "delayed"],
+      "properties": {
+        "symbol": { "$ref": "#/$defs/Symbol" },
+        "label": { "type": "string", "maxLength": 40 },
+        "proxy_for": { "type": "string", "maxLength": 40, "description": "Set when an ETF stands in for an index, e.g. 'S&P 500' for SPY (§2.16). The HUD labels it as a proxy." },
+        "price": { "$ref": "#/$defs/Decimal" },
+        "change_pct": { "$ref": "#/$defs/SignedPct" },
+        "as_of": { "$ref": "#/$defs/EpochMs" },
+        "delayed": { "type": "boolean" },
+        "sparkline": { "type": "array", "maxItems": 96, "items": { "type": "number" } }
+      }
+    },
+    "MarketsData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session", "quotes"],
+      "properties": {
+        "session": { "enum": ["pre", "open", "after", "closed", "holiday"] },
+        "quotes": { "type": "array", "maxItems": 60, "items": { "$ref": "#/$defs/Quote" }, "description": "Indices and the user's display watchlist. Decoy tickers (D22) are never sent to the HUD." },
+        "credits": {
+          "type": "object", "additionalProperties": false, "required": ["used_today", "limit_today"],
+          "properties": { "used_today": { "type": "integer", "minimum": 0 }, "limit_today": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    },
+
+    "PortfolioData": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["locked"],
+          "properties": { "locked": { "const": true } },
+          "description": "Shown as 'Locked' until the passphrase is entered (D21)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["locked", "currency", "total_value", "day_change", "day_change_pct", "as_of", "top_movers"],
+          "properties": {
+            "locked": { "const": false },
+            "currency": { "const": "USD" },
+            "total_value": { "$ref": "#/$defs/Decimal" },
+            "day_change": { "$ref": "#/$defs/Decimal" },
+            "day_change_pct": { "$ref": "#/$defs/SignedPct" },
+            "total_gain": { "$ref": "#/$defs/Decimal" },
+            "total_gain_pct": { "$ref": "#/$defs/SignedPct" },
+            "as_of": { "$ref": "#/$defs/EpochMs" },
+            "nav_as_of": { "$ref": "#/$defs/Date", "description": "Date of the Fidelity export used to value mutual funds (§2.16)." },
+            "top_movers": {
+              "type": "array", "maxItems": 10,
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["symbol", "change_pct"],
+                "properties": {
+                  "symbol": { "$ref": "#/$defs/Symbol" },
+                  "change_pct": { "$ref": "#/$defs/SignedPct" },
+                  "value": { "$ref": "#/$defs/Decimal" },
+                  "weight_pct": { "$ref": "#/$defs/Pct" }
+                }
+              }
+            },
+            "alerts": {
+              "type": "array", "maxItems": 10,
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["alert_id", "symbol", "message"],
+                "properties": {
+                  "alert_id": { "$ref": "#/$defs/Id" },
+                  "symbol": { "$ref": "#/$defs/Symbol" },
+                  "message": { "type": "string", "maxLength": 120 }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "PortfolioRedacted": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["locked"], "properties": { "locked": { "const": true } } },
+        {
+          "type": "object", "additionalProperties": false, "required": ["locked", "day_change_pct"],
+          "properties": { "locked": { "const": false }, "day_change_pct": { "$ref": "#/$defs/SignedPct" } },
+          "description": "Day change in % only; amounts hidden (§4.6)."
+        }
+      ]
+    },
+
+    "HostStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pi", "llm", "voice"],
+      "properties": {
+        "pi": {
+          "type": "object", "additionalProperties": false, "required": ["cpu_pct", "ram_pct", "temp_c", "disk_write_mb_24h"],
+          "properties": {
+            "cpu_pct": { "$ref": "#/$defs/Pct" },
+            "ram_pct": { "$ref": "#/$defs/Pct" },
+            "temp_c": { "type": "number" },
+            "disk_write_mb_24h": { "type": "number", "minimum": 0, "description": "Compared against the 100 MB/day microSD budget (§3.5)." },
+            "throttled": { "type": "boolean" }
+          }
+        },
+        "llm": {
+          "type": "object", "additionalProperties": false, "required": ["power", "link", "service"],
+          "properties": {
+            "power": { "enum": ["asleep", "waking", "up", "unknown"] },
+            "link": { "enum": ["up", "down"], "description": "WireGuard tunnel." },
+            "service": {
+              "enum": ["ready", "loading", "degraded", "busy", "signed_out", "down", "unknown"],
+              "description": "LLM server availability (§5.6): degraded → HOST: DEGRADED; busy → HOST: BUSY (D16); signed_out → CORE OFFLINE · SIGNED OUT."
+            },
+            "gpu": {
+              "type": "object", "additionalProperties": false, "required": ["util_pct", "vram_used_mb", "vram_total_mb", "temp_c"],
+              "properties": {
+                "util_pct": { "$ref": "#/$defs/Pct" },
+                "vram_used_mb": { "type": "integer", "minimum": 0 },
+                "vram_total_mb": { "type": "integer", "minimum": 0 },
+                "temp_c": { "type": "number" }
+              }
+            },
+            "model_loaded": { "type": "string", "maxLength": 100 }
+          }
+        },
+        "voice": {
+          "type": "object", "additionalProperties": false, "required": ["status", "wake_word"],
+          "properties": {
+            "status": { "enum": ["ok", "unavailable"], "description": "unavailable → VOICE UNAVAILABLE · TYPE BELOW (§5.6, FI-4)." },
+            "wake_word": { "enum": ["active", "suppressed", "off"], "description": "suppressed while ATLAS speaks unless AEC is verified (§2.2)." }
+          }
+        }
+      }
+    },
+
+    "Budget": {
+      "type": "object", "additionalProperties": false, "required": ["steps", "time_s", "tokens", "bytes"],
+      "properties": {
+        "steps": { "type": "integer", "minimum": 0 },
+        "time_s": { "type": "integer", "minimum": 0 },
+        "tokens": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "TaskProgress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "kind", "status", "redacted", "step", "budget", "used", "unattended"],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/Id" },
+        "kind": { "enum": ["research"] },
+        "status": { "enum": ["queued", "running", "blocked", "done", "failed", "killed"] },
+        "title": { "type": "string", "maxLength": 120, "description": "The user's research question, shortened. Omitted when redacted." },
+        "redacted": { "type": "boolean" },
+        "step": { "type": "integer", "minimum": 0 },
+        "budget": { "$ref": "#/$defs/Budget", "description": "Limits (§2.13)." },
+        "used": { "$ref": "#/$defs/Budget", "description": "Consumed so far." },
+        "unattended": { "type": "boolean" },
+        "flags": { "type": "array", "maxItems": 4, "uniqueItems": true, "items": { "enum": ["low_source_coverage", "paused_window_end", "citation_failures"] } },
+        "result_ref": { "$ref": "#/$defs/Id" }
+      },
+      "if": { "properties": { "redacted": { "const": true } } },
+      "then": { "not": { "required": ["title"] } },
+      "else": { "required": ["title"] }
+    },
+
+    "ActionKind": { "enum": ["email.send", "discord.post", "research.schedule", "portfolio.import"] },
+    "ActionPending": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action_id", "kind", "summary", "payload_canonical", "payload_sha256", "provenance", "created_at", "expires_at", "redacted"],
+          "properties": {
+            "action_id": { "$ref": "#/$defs/Id" },
+            "kind": { "$ref": "#/$defs/ActionKind" },
+            "summary": { "$ref": "#/$defs/ShortText" },
+            "payload_canonical": {
+              "type": "string",
+              "maxLength": 65536,
+              "description": "The exact payload the executor will run, serialized with RFC 8785 (JCS). payload_sha256 = SHA-256 of its UTF-8 bytes. The HUD MUST recompute the hash and refuse to offer Approve on mismatch, and displays the payload parsed from this string. Kind-specific payload shapes are added in later minor revisions."
+            },
+            "payload_sha256": { "$ref": "#/$defs/Sha256Hex" },
+            "provenance": { "$ref": "#/$defs/Provenance" },
+            "warnings": { "type": "array", "maxItems": 6, "uniqueItems": true, "items": { "enum": ["new_recipient", "not_on_allowlist", "tainted_args", "unattended_origin"] } },
+            "created_at": { "$ref": "#/$defs/EpochMs" },
+            "expires_at": { "$ref": "#/$defs/EpochMs" },
+            "redacted": { "const": false }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action_id", "expires_at", "redacted"],
+          "properties": {
+            "action_id": { "$ref": "#/$defs/Id" },
+            "expires_at": { "$ref": "#/$defs/EpochMs" },
+            "redacted": { "const": true }
+          },
+          "description": "Privacy mode: count only (§4.6)."
+        }
+      ]
+    },
+    "ActionResolved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "outcome", "at"],
+      "properties": {
+        "action_id": { "$ref": "#/$defs/Id" },
+        "outcome": { "enum": ["approved", "denied", "expired", "executed", "failed", "withdrawn"] },
+        "code": { "$ref": "#/$defs/Code" },
+        "at": { "$ref": "#/$defs/EpochMs" }
+      },
+      "description": "Removes the item from the pending list (approved items stay visible until executed or failed)."
+    },
+
+    "Alert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alert_id", "level", "code", "message"],
+      "properties": {
+        "alert_id": { "$ref": "#/$defs/Id" },
+        "level": { "enum": ["info", "warn", "critical"] },
+        "code": { "$ref": "#/$defs/Code" },
+        "message": { "$ref": "#/$defs/ShortText" }
+      }
+    },
+
+    "PrivacyMode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["on", "reason"],
+      "properties": {
+        "on": { "type": "boolean" },
+        "reason": { "enum": ["user", "inactivity"] }
+      },
+      "description": "Per device. While on, the server redacts personal/secret data for this device and stops sending transcript.* and assistant.delta. On every change the server follows with a fresh sync.snapshot."
+    },
+
+    "ClockPong": {
+      "type": "object", "additionalProperties": false, "required": ["client_t", "server_t"],
+      "properties": { "client_t": { "type": "number", "minimum": 0 }, "server_t": { "$ref": "#/$defs/EpochMs" } }
+    },
+
+    "Device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "role", "can_approve", "can_unlock_portfolio"],
+      "properties": {
+        "device_id": { "$ref": "#/$defs/Id" },
+        "role": { "enum": ["kiosk", "remote"] },
+        "can_approve": { "type": "boolean", "description": "False for the kiosk by default (AP-4)." },
+        "can_unlock_portfolio": { "type": "boolean", "description": "False for the kiosk unless allowed in settings (§4.5)." }
+      }
+    },
+    "LayoutSlots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["left", "right"],
+      "properties": {
+        "top": { "$ref": "#/$defs/LayoutPanelId" },
+        "left": { "type": "array", "maxItems": 10, "uniqueItems": true, "items": { "$ref": "#/$defs/LayoutPanelId" } },
+        "right": { "type": "array", "maxItems": 10, "uniqueItems": true, "items": { "$ref": "#/$defs/LayoutPanelId" } },
+        "bottom": { "$ref": "#/$defs/LayoutPanelId" }
+      }
+    },
+    "LayoutProfile": { "enum": ["kiosk", "remote", "compact"] },
+
+    "SyncSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["server", "device", "state", "host", "privacy", "panels", "actions", "tasks", "alerts", "transcript", "layouts"],
+      "properties": {
+        "server": {
+          "type": "object", "additionalProperties": false, "required": ["version", "schema_revision", "boot_id"],
+          "properties": {
+            "version": { "type": "string", "maxLength": 40 },
+            "schema_revision": { "type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$" },
+            "boot_id": { "$ref": "#/$defs/Id" }
+          }
+        },
+        "device": { "$ref": "#/$defs/Device" },
+        "state": { "$ref": "#/$defs/StateChanged" },
+        "host": { "$ref": "#/$defs/HostStatus" },
+        "privacy": { "$ref": "#/$defs/PrivacyMode" },
+        "panels": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/PanelUpdate" } },
+        "actions": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/ActionPending" } },
+        "tasks": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/TaskProgress" } },
+        "alerts": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/Alert" }, "description": "The most recent alerts, oldest first." },
+        "transcript": {
+          "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/Transcript" },
+          "description": "Most recent final utterances, oldest first. Empty while privacy mode is on."
+        },
+        "layouts": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "kiosk": { "$ref": "#/$defs/LayoutSlots" },
+            "remote": { "$ref": "#/$defs/LayoutSlots" },
+            "compact": { "$ref": "#/$defs/LayoutSlots" }
+          }
+        }
+      }
+    },
+
+    "StepupGranted": {
+      "type": "object", "additionalProperties": false, "required": ["token", "expires_at"],
+      "properties": {
+        "token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,128}$", "x-atlas-sensitive": true },
+        "expires_at": { "$ref": "#/$defs/EpochMs", "description": "60 s after the PIN was verified (§4.5)." }
+      }
+    },
+    "RequestResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref_seq", "ok"],
+      "properties": {
+        "ref_seq": { "type": "integer", "minimum": 0, "description": "seq of the client frame this answers." },
+        "ok": { "type": "boolean" },
+        "code": { "$ref": "#/$defs/Code" },
+        "message": { "$ref": "#/$defs/ShortText" }
+      },
+      "if": { "properties": { "ok": { "const": false } } },
+      "then": { "required": ["code"] }
+    },
+
+    "Empty": { "type": "object", "additionalProperties": false, "properties": {} },
+    "TextInput": {
+      "type": "object", "additionalProperties": false, "required": ["text"],
+      "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 2000 } }
+    },
+    "ActionDecide": {
+      "type": "object", "additionalProperties": false, "required": ["action_id", "decision", "payload_sha256", "step_up_token"],
+      "properties": {
+        "action_id": { "$ref": "#/$defs/Id" },
+        "decision": { "enum": ["approve", "deny"] },
+        "payload_sha256": { "$ref": "#/$defs/Sha256Hex", "description": "The hash the HUD itself computed from payload_canonical." },
+        "step_up_token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,128}$", "x-atlas-sensitive": true }
+      }
+    },
+    "TaskKill": {
+      "type": "object", "additionalProperties": false, "required": ["task_id"],
+      "properties": { "task_id": { "$ref": "#/$defs/Id" } }
+    },
+    "PrivacySet": {
+      "type": "object", "additionalProperties": false, "required": ["on"],
+      "properties": {
+        "on": { "type": "boolean" },
+        "step_up_token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,128}$", "x-atlas-sensitive": true, "description": "Required to turn privacy mode off from a remote device (§4.6)." }
+      }
+    },
+    "PortfolioUnlock": {
+      "type": "object", "additionalProperties": false, "required": ["passphrase"],
+      "properties": { "passphrase": { "type": "string", "minLength": 1, "maxLength": 1024, "x-atlas-sensitive": true } },
+      "description": "Never logged, never sent to an LLM, rate-limited; refused from the kiosk unless allowed (§4.5)."
+    },
+    "LayoutSave": {
+      "type": "object", "additionalProperties": false, "required": ["profile", "slots"],
+      "properties": { "profile": { "$ref": "#/$defs/LayoutProfile" }, "slots": { "$ref": "#/$defs/LayoutSlots" } }
+    },
+    "ClockPing": {
+      "type": "object", "additionalProperties": false, "required": ["client_t"],
+      "properties": { "client_t": { "type": "number", "minimum": 0 } }
+    },
+    "SyncRequest": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "last_seq": { "type": "integer", "minimum": 0 } }
+    },
+    "StepupVerify": {
+      "type": "object", "additionalProperties": false, "required": ["pin"],
+      "properties": { "pin": { "type": "string", "pattern": "^[0-9]{4,12}$", "x-atlas-sensitive": true } }
+    }
+  }
+}

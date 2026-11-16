@@ -1,0 +1,29 @@
+{
+  "name": "cold_wake",
+  "description": "Host asleep: listening -> waking_host (packet, link, api, model over ~16 s) -> thinking -> speaking -> idle.",
+  "steps": [
+    { "at": 500, "emit": { "type": "state.changed", "payload": { "state": "listening" } } },
+    { "at": 500, "gen": "mic_levels", "args": { "duration_ms": 2400, "seed": 7 } },
+    { "at": 3000, "emit": { "type": "transcript.final", "payload": { "utterance_id": "u1", "role": "user", "text": "Summarise my research on RISC-V.", "source": "voice" } } },
+    { "at": 3000, "gen": "wake_progress", "args": { "stages": { "packet": 0, "link": 4000, "api": 9000, "model": 13000 }, "until_ms": 16000 } },
+    { "at": 3000, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 15, "ram_pct": 42, "temp_c": 59.0, "disk_write_mb_24h": 37.4 },
+      "llm": { "power": "waking", "link": "down", "service": "unknown" },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 4800, "gen": "tts_envelope", "args": { "duration_ms": 1800, "seed": 8 } },
+    { "at": 4800, "emit": { "type": "transcript.final", "payload": { "utterance_id": "a0", "role": "assistant", "text": "One moment, waking my core.", "source": "voice" } } },
+    { "at": 7000, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 14, "ram_pct": 42, "temp_c": 59.0, "disk_write_mb_24h": 37.4 },
+      "llm": { "power": "up", "link": "up", "service": "loading" },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 19200, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 16, "ram_pct": 43, "temp_c": 59.4, "disk_write_mb_24h": 37.4 },
+      "llm": { "power": "up", "link": "up", "service": "ready", "gpu": { "util_pct": 41, "vram_used_mb": 6510, "vram_total_mb": 8192, "temp_c": 52 }, "model_loaded": "qwen3.5-9b-q4_k_m" },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 19200, "emit": { "type": "state.changed", "payload": { "state": "thinking" } } },
+    { "at": 20400, "gen": "tts_envelope", "args": { "duration_ms": 4400, "seed": 9 } },
+    { "at": 20400, "emit": { "type": "state.changed", "payload": { "state": "speaking" } } },
+    { "at": 20400, "gen": "assistant_reply", "args": { "utterance_id": "a1", "text": "Your RISC-V research covered the vector extension, three open cores, and toolchain status. The summary is in this morning's digest." } },
+    { "at": 25000, "emit": { "type": "state.changed", "payload": { "state": "idle" } } }
+  ]
+}

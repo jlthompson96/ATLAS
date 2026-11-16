@@ -1,0 +1,55 @@
+# --- Secrets: never commit (see CLAUDE.md "No secrets in the repo") ---
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.cred
+*.creds
+*.secret
+*.age
+*.conf.local
+wg*.conf
+!deploy/wireguard/*.template.conf
+credential.secret
+*token*.json
+client_secret*.json
+# Real exports and private data
+*.csv
+!**/fixtures/**/*.redacted.csv
+portfolio*.enc
+inventory-private/
+
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# --- Node ---
+node_modules/
+frontend/hud/dist/
+.vite/
+
+# --- Models and large artifacts (hash-pinned, stored outside git) ---
+*.gguf
+*.onnx
+*.safetensors
+*.bin
+
+# --- Benchmarks: raw captures stay local; summaries in bench/results/ are committed ---
+bench/**/raw/
+*.pcap
+*.pcapng
+
+# --- OS / editors ---
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

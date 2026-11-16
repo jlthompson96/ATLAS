@@ -1,0 +1,19 @@
+{
+  "name": "wake_timeout",
+  "description": "Host never finishes waking: waking_host stalls at link, 60 s deadline, error WAKE_FAILED, alert, llm_unreachable. Try --speed 4.",
+  "steps": [
+    { "at": 500, "emit": { "type": "state.changed", "payload": { "state": "listening" } } },
+    { "at": 500, "gen": "mic_levels", "args": { "duration_ms": 2000, "seed": 10 } },
+    { "at": 2600, "emit": { "type": "transcript.final", "payload": { "utterance_id": "u1", "role": "user", "text": "Draft a reply to Dana.", "source": "voice" } } },
+    { "at": 2600, "gen": "wake_progress", "args": { "stages": { "packet": 0, "link": 6000 }, "until_ms": 60000 } },
+    { "at": 4400, "gen": "tts_envelope", "args": { "duration_ms": 1800, "seed": 11 } },
+    { "at": 4400, "emit": { "type": "transcript.final", "payload": { "utterance_id": "a0", "role": "assistant", "text": "One moment, waking my core.", "source": "voice" } } },
+    { "at": 17600, "gen": "tts_envelope", "args": { "duration_ms": 1200, "seed": 12 } },
+    { "at": 17600, "emit": { "type": "transcript.final", "payload": { "utterance_id": "a1", "role": "assistant", "text": "Still waking.", "source": "voice" } } },
+    { "at": 62700, "emit": { "type": "state.changed", "payload": { "state": "error", "code": "WAKE_FAILED", "detail": "core didn't wake" } } },
+    { "at": 62700, "emit": { "type": "alert", "payload": { "alert_id": "al-wake-1", "level": "warn", "code": "WAKE_FAILED", "message": "Core didn't wake within 60 s (last stage: link). Request queued." } } },
+    { "at": 62800, "gen": "tts_envelope", "args": { "duration_ms": 4200, "seed": 13 } },
+    { "at": 62800, "emit": { "type": "transcript.final", "payload": { "utterance_id": "a2", "role": "assistant", "text": "My core didn't wake. I've saved your request and will retry; you can also type it.", "source": "voice" } } },
+    { "at": 67700, "emit": { "type": "state.changed", "payload": { "state": "llm_unreachable", "code": "WAKE_FAILED", "detail": "retry in 1 min" } } }
+  ]
+}

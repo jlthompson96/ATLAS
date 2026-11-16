@@ -1,0 +1,22 @@
+{
+  "name": "privacy",
+  "description": "Privacy mode on (inactivity): server sends redacted panels/actions/tasks and withholds transcripts until privacy is turned off.",
+  "steps": [
+    { "at": 1000, "emit": { "type": "privacy.mode", "payload": { "on": true, "reason": "inactivity" } } },
+    { "at": 2500, "emit": { "type": "panel.update", "payload": {
+      "panel_id": "email", "sensitivity": "secret", "redacted": false, "updated_at": "@t0+2500",
+      "data": { "unread": 5, "auth": { "status": "ok", "expires_at": "@t0+500000000" }, "items": [
+        { "id": "gm-18c2f05", "from_display": "Dana Whitfield", "from_domain": "example.org", "subject": "Re: Saturday plans?", "received_at": "@t0+2400", "unread": true }
+      ] } } } },
+    { "at": 3500, "emit": { "type": "transcript.final", "payload": { "utterance_id": "u9", "role": "user", "text": "This transcript must not reach a device in privacy mode.", "source": "text" } } },
+    { "at": 4500, "emit": { "type": "action.pending", "payload": {
+      "action_id": "act-201", "kind": "email.send", "summary": "Reply to Dana",
+      "payload_canonical": { "kind": "email.send", "to": ["dana@example.org"], "cc": [], "subject": "Re: Saturday plans?", "body": "See you then." },
+      "payload_sha256": "@auto",
+      "provenance": { "tainted": false, "sources": [ { "kind": "user", "ref": "utterance:u9" } ] },
+      "created_at": "@t0+4500", "expires_at": "@t0+3600000", "redacted": false } } },
+    { "at": 5500, "emit": { "type": "task.progress", "payload": { "task_id": "task-0020", "kind": "research", "status": "running", "title": "Private topic title", "redacted": false, "step": 2,
+      "budget": { "steps": 25, "time_s": 600, "tokens": 200000, "bytes": 20000000 }, "used": { "steps": 2, "time_s": 20, "tokens": 8000, "bytes": 400000 }, "unattended": false } } },
+    { "at": 9000, "emit": { "type": "privacy.mode", "payload": { "on": false, "reason": "user" } } }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "barge_in",
+  "description": "User interrupts while ATLAS is speaking: speaking -> listening -> thinking -> speaking -> idle.",
+  "setup": [
+    { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 22, "ram_pct": 45, "temp_c": 61.0, "disk_write_mb_24h": 38.0 },
+      "llm": { "power": "up", "link": "up", "service": "ready", "model_loaded": "qwen3.5-9b-q4_k_m" },
+      "voice": { "status": "ok", "wake_word": "active" } } }
+  ],
+  "steps": [
+    { "at": 500, "emit": { "type": "state.changed", "payload": { "state": "listening" } } },
+    { "at": 500, "gen": "mic_levels", "args": { "duration_ms": 1500, "seed": 3 } },
+    { "at": 2100, "emit": { "type": "transcript.final", "payload": { "utterance_id": "u1", "role": "user", "text": "Tell me about the weekend weather.", "source": "voice" } } },
+    { "at": 2100, "emit": { "type": "state.changed", "payload": { "state": "thinking" } } },
+    { "at": 3000, "gen": "tts_envelope", "args": { "duration_ms": 1700, "seed": 4 } },
+    { "at": 3000, "emit": { "type": "state.changed", "payload": { "state": "speaking" } } },
+    { "at": 3000, "gen": "assistant_reply", "args": { "utterance_id": "a1", "text": "Saturday starts overcast around eight degrees, then", "source": "voice" } },
+    { "at": 4700, "emit": { "type": "state.changed", "payload": { "state": "listening", "detail": "barge-in" } } },
+    { "at": 4700, "gen": "mic_levels", "args": { "duration_ms": 1200, "seed": 5 } },
+    { "at": 6000, "emit": { "type": "transcript.final", "payload": { "utterance_id": "u2", "role": "user", "text": "Just Sunday.", "source": "voice" } } },
+    { "at": 6000, "emit": { "type": "state.changed", "payload": { "state": "thinking" } } },
+    { "at": 6700, "gen": "tts_envelope", "args": { "duration_ms": 2600, "seed": 6 } },
+    { "at": 6700, "emit": { "type": "state.changed", "payload": { "state": "speaking" } } },
+    { "at": 6700, "gen": "assistant_reply", "args": { "utterance_id": "a2", "text": "Sunday: light rain after noon, high of eleven." } },
+    { "at": 9500, "emit": { "type": "state.changed", "payload": { "state": "idle" } } }
+  ]
+}

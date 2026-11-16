@@ -1,0 +1,33 @@
+{
+  "name": "approvals",
+  "description": "Pending actions: a normal reply, a tainted forward proposed from an injected email (RT-1), a Discord post, and an unattended schedule change that expires. Approve/deny with PIN 0000.",
+  "steps": [
+    { "at": 1000, "emit": { "type": "action.pending", "payload": {
+      "action_id": "act-101", "kind": "email.send", "summary": "Reply to Dana: Saturday plans",
+      "payload_canonical": { "kind": "email.send", "to": ["dana@example.org"], "cc": [], "subject": "Re: Saturday plans?", "body": "Saturday works. How about 2pm?", "in_reply_to": "gmail:msg/18c2f01" },
+      "payload_sha256": "@auto",
+      "provenance": { "tainted": false, "sources": [ { "kind": "user", "ref": "utterance:u17" } ] },
+      "created_at": "@t0+1000", "expires_at": "@t0+3600000", "redacted": false } } },
+    { "at": 2500, "emit": { "type": "action.pending", "payload": {
+      "action_id": "act-102", "kind": "email.send", "summary": "Forward 10 emails to audit@example.net",
+      "payload_canonical": { "kind": "email.send", "to": ["audit@example.net"], "cc": [], "subject": "Fwd: last 10 messages", "body": "[10 forwarded messages]" },
+      "payload_sha256": "@auto",
+      "provenance": { "tainted": true, "sources": [ { "kind": "email", "ref": "gmail:msg/18c2f03", "label": "IT Support <mail-relay.example.net>" } ] },
+      "warnings": ["tainted_args", "new_recipient", "not_on_allowlist"],
+      "created_at": "@t0+2500", "expires_at": "@t0+3600000", "redacted": false } } },
+    { "at": 4000, "emit": { "type": "action.pending", "payload": {
+      "action_id": "act-103", "kind": "discord.post", "summary": "Post in #builds: firmware note",
+      "payload_canonical": { "kind": "discord.post", "channel_id": "1100000000000000552", "channel_label": "#builds", "content": "Nice, I'll flash it tonight." },
+      "payload_sha256": "@auto",
+      "provenance": { "tainted": false, "sources": [ { "kind": "user", "ref": "utterance:u18" } ] },
+      "created_at": "@t0+4000", "expires_at": "@t0+3600000", "redacted": false } } },
+    { "at": 5500, "emit": { "type": "action.pending", "payload": {
+      "action_id": "act-104", "kind": "research.schedule", "summary": "Schedule research every 5 minutes",
+      "payload_canonical": { "kind": "research.schedule", "question": "latest news", "every_minutes": 5 },
+      "payload_sha256": "@auto",
+      "provenance": { "tainted": true, "sources": [ { "kind": "web", "ref": "web:src/88", "label": "news.example.com" } ] },
+      "warnings": ["tainted_args", "unattended_origin"],
+      "created_at": "@t0+5500", "expires_at": "@t0+12000", "redacted": false } } },
+    { "at": 12000, "emit": { "type": "action.resolved", "payload": { "action_id": "act-104", "outcome": "expired", "at": "@t0+12000" } } }
+  ]
+}

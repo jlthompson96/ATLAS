@@ -1,0 +1,22 @@
+{
+  "name": "conversation",
+  "description": "Warm path: wake word, listening (mic level), thinking, speaking (TTS envelope), idle.",
+  "setup": [
+    { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 18, "ram_pct": 44, "temp_c": 60.1, "disk_write_mb_24h": 37.9 },
+      "llm": { "power": "up", "link": "up", "service": "ready", "gpu": { "util_pct": 3, "vram_used_mb": 6420, "vram_total_mb": 8192, "temp_c": 46 }, "model_loaded": "qwen3.5-9b-q4_k_m" },
+      "voice": { "status": "ok", "wake_word": "active" } } }
+  ],
+  "steps": [
+    { "at": 1000, "emit": { "type": "state.changed", "payload": { "state": "listening" } } },
+    { "at": 1000, "gen": "mic_levels", "args": { "duration_ms": 2600, "seed": 1 } },
+    { "at": 1700, "emit": { "type": "transcript.partial", "payload": { "utterance_id": "u1", "role": "user", "text": "what's in my", "source": "voice" } } },
+    { "at": 2600, "emit": { "type": "transcript.partial", "payload": { "utterance_id": "u1", "role": "user", "text": "what's in my inbox", "source": "voice" } } },
+    { "at": 3700, "emit": { "type": "transcript.final", "payload": { "utterance_id": "u1", "role": "user", "text": "What's in my inbox?", "source": "voice" } } },
+    { "at": 3700, "emit": { "type": "state.changed", "payload": { "state": "thinking" } } },
+    { "at": 4900, "gen": "tts_envelope", "args": { "duration_ms": 5200, "seed": 2 } },
+    { "at": 4900, "emit": { "type": "state.changed", "payload": { "state": "speaking" } } },
+    { "at": 4900, "gen": "assistant_reply", "args": { "utterance_id": "a1", "text": "You have four new emails. One from Dana about Saturday plans, a utility statement, a library reminder, and one from a new sender that I've flagged as suspicious.", "provenance": { "tainted": true, "sources": [ { "kind": "email", "ref": "gmail:msg/18c2f01" }, { "kind": "email", "ref": "gmail:msg/18c2f03", "label": "IT Support" } ] } } },
+    { "at": 10300, "emit": { "type": "state.changed", "payload": { "state": "idle" } } }
+  ]
+}

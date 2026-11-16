@@ -1,0 +1,30 @@
+{
+  "name": "stale_data",
+  "description": "Weekly Google re-authorization due then expired, market provider failing (FI-12), egress proxy down (FI-6), audit chain broken (PT-13).",
+  "steps": [
+    { "at": 1000, "emit": { "type": "panel.update", "payload": {
+      "panel_id": "email", "sensitivity": "secret", "redacted": false, "updated_at": "@t0+1000",
+      "data": { "unread": 4, "auth": { "status": "expiring", "expires_at": "@t0+86000000" }, "items": [] } } } },
+    { "at": 1000, "emit": { "type": "alert", "payload": { "alert_id": "al-sd-1", "level": "info", "code": "GOOGLE_REAUTH_DUE", "message": "Re-authorize Google within 24 h to keep email and calendar." } } },
+    { "at": 4000, "emit": { "type": "panel.update", "payload": {
+      "panel_id": "markets", "sensitivity": "personal", "redacted": false, "updated_at": "@t0-1800000", "stale_since": "@t0-1700000",
+      "data": { "session": "open", "credits": { "used_today": 800, "limit_today": 800 }, "quotes": [
+        { "symbol": "SPY", "proxy_for": "S&P 500", "price": "611.90", "change_pct": 0.34, "as_of": "@t0-1800000", "delayed": true }
+      ] } } } },
+    { "at": 4000, "emit": { "type": "alert", "payload": { "alert_id": "al-sd-2", "level": "warn", "code": "MARKET_STALE", "message": "Market data stale since 10:12 (daily credits used up)." } } },
+    { "at": 7000, "emit": { "type": "panel.update", "payload": {
+      "panel_id": "egress_audit", "sensitivity": "public", "redacted": false, "updated_at": "@t0+7000",
+      "data": { "egress": { "proxy": "down", "allowed_24h": 415, "blocked_24h": 0 }, "audit": { "chain": "ok", "records_24h": 1901, "last_verified_at": "@t0+6000" } } } } },
+    { "at": 7000, "emit": { "type": "alert", "payload": { "alert_id": "al-sd-3", "level": "warn", "code": "EGRESS_DOWN", "message": "Egress proxy down. Integrations paused (no direct fallback)." } } },
+    { "at": 10000, "emit": { "type": "panel.update", "payload": {
+      "panel_id": "email", "sensitivity": "secret", "redacted": false, "updated_at": "@t0+1000", "stale_since": "@t0+10000",
+      "data": { "unread": 4, "auth": { "status": "expired" }, "items": [] } } } },
+    { "at": 10000, "emit": { "type": "panel.update", "payload": {
+      "panel_id": "calendar", "sensitivity": "secret", "redacted": false, "updated_at": "@t0-300000", "stale_since": "@t0+10000",
+      "data": { "auth": { "status": "expired" }, "events": [] } } } },
+    { "at": 13000, "emit": { "type": "panel.update", "payload": {
+      "panel_id": "egress_audit", "sensitivity": "public", "redacted": false, "updated_at": "@t0+13000",
+      "data": { "egress": { "proxy": "up", "allowed_24h": 415, "blocked_24h": 0 }, "audit": { "chain": "broken", "records_24h": 1901, "last_verified_at": "@t0+13000" } } } } },
+    { "at": 13000, "emit": { "type": "alert", "payload": { "alert_id": "al-sd-4", "level": "critical", "code": "AUDIT_CHAIN_BROKEN", "message": "Audit chain verification failed at seq 18342." } } }
+  ]
+}

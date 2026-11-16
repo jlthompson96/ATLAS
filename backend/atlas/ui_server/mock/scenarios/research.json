@@ -1,0 +1,23 @@
+{
+  "name": "research",
+  "description": "Research tasks: one runs to done, an unattended one hits low source coverage, one is killed by the kill switch.",
+  "steps": [
+    { "at": 500, "emit": { "type": "task.progress", "payload": { "task_id": "task-0010", "kind": "research", "status": "queued", "title": "Compare open-source TTS voices for the Pi 5", "redacted": false, "step": 0,
+      "budget": { "steps": 25, "time_s": 600, "tokens": 200000, "bytes": 20000000 }, "used": { "steps": 0, "time_s": 0, "tokens": 0, "bytes": 0 }, "unattended": false } } },
+    { "at": 800, "emit": { "type": "task.progress", "payload": { "task_id": "task-0011", "kind": "research", "status": "running", "title": "Overnight: home battery prices 2026", "redacted": false, "step": 12,
+      "budget": { "steps": 40, "time_s": 1800, "tokens": 400000, "bytes": 50000000 }, "used": { "steps": 12, "time_s": 410, "tokens": 96000, "bytes": 8100000 }, "unattended": true } } },
+    { "at": 1000, "emit": { "type": "task.progress", "payload": { "task_id": "task-0012", "kind": "research", "status": "running", "title": "Wikipedia deep-dive: Antikythera mechanism", "redacted": false, "step": 3,
+      "budget": { "steps": 25, "time_s": 600, "tokens": 200000, "bytes": 20000000 }, "used": { "steps": 3, "time_s": 40, "tokens": 15000, "bytes": 900000 }, "unattended": false } } },
+    { "at": 2000, "emit": { "type": "task.progress", "payload": { "task_id": "task-0010", "kind": "research", "status": "running", "title": "Compare open-source TTS voices for the Pi 5", "redacted": false, "step": 4,
+      "budget": { "steps": 25, "time_s": 600, "tokens": 200000, "bytes": 20000000 }, "used": { "steps": 4, "time_s": 55, "tokens": 31000, "bytes": 2400000 }, "unattended": false } } },
+    { "at": 4000, "emit": { "type": "task.progress", "payload": { "task_id": "task-0011", "kind": "research", "status": "running", "title": "Overnight: home battery prices 2026", "redacted": false, "step": 19, "flags": ["low_source_coverage"],
+      "budget": { "steps": 40, "time_s": 1800, "tokens": 400000, "bytes": 50000000 }, "used": { "steps": 19, "time_s": 640, "tokens": 151000, "bytes": 12700000 }, "unattended": true } } },
+    { "at": 5000, "emit": { "type": "task.progress", "payload": { "task_id": "task-0010", "kind": "research", "status": "running", "title": "Compare open-source TTS voices for the Pi 5", "redacted": false, "step": 11,
+      "budget": { "steps": 25, "time_s": 600, "tokens": 200000, "bytes": 20000000 }, "used": { "steps": 11, "time_s": 170, "tokens": 88000, "bytes": 7300000 }, "unattended": false } } },
+    { "at": 7000, "emit": { "type": "task.progress", "payload": { "task_id": "task-0012", "kind": "research", "status": "killed", "title": "Wikipedia deep-dive: Antikythera mechanism", "redacted": false, "step": 6,
+      "budget": { "steps": 25, "time_s": 600, "tokens": 200000, "bytes": 20000000 }, "used": { "steps": 6, "time_s": 92, "tokens": 30000, "bytes": 1900000 }, "unattended": false } } },
+    { "at": 7000, "emit": { "type": "alert", "payload": { "alert_id": "al-rs-1", "level": "info", "code": "TASK_KILLED", "message": "Research stopped: Antikythera mechanism" } } },
+    { "at": 9000, "emit": { "type": "task.progress", "payload": { "task_id": "task-0010", "kind": "research", "status": "done", "title": "Compare open-source TTS voices for the Pi 5", "redacted": false, "step": 17, "result_ref": "res-0010",
+      "budget": { "steps": 25, "time_s": 600, "tokens": 200000, "bytes": 20000000 }, "used": { "steps": 17, "time_s": 260, "tokens": 132000, "bytes": 11200000 }, "unattended": false } } }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "portfolio_locked",
+  "description": "After a reboot the portfolio is Locked while markets keep updating; then it unlocks. Use --scenario interactive to try the passphrase 'atlas-mock'.",
+  "steps": [
+    { "at": 1000, "emit": { "type": "alert", "payload": { "alert_id": "al-pf-1", "level": "info", "code": "PORTFOLIO_LOCKED", "message": "Portfolio locked after restart. Enter your passphrase to unlock." } } },
+    { "at": 4000, "emit": { "type": "panel.update", "payload": {
+      "panel_id": "markets", "sensitivity": "personal", "redacted": false, "updated_at": "@t0+4000",
+      "data": { "session": "open", "credits": { "used_today": 252, "limit_today": 800 }, "quotes": [
+        { "symbol": "SPY", "proxy_for": "S&P 500", "price": "613.02", "change_pct": 0.53, "as_of": "@t0+4000", "delayed": true },
+        { "symbol": "QQQ", "proxy_for": "Nasdaq-100", "price": "539.40", "change_pct": 1.01, "as_of": "@t0+4000", "delayed": true },
+        { "symbol": "NVDA", "label": "NVIDIA", "price": "188.05", "change_pct": 2.77, "as_of": "@t0+4000", "delayed": true }
+      ] } } } },
+    { "at": 9000, "type": "panel.update", "fixture": "portfolio_unlocked" }
+  ]
+}

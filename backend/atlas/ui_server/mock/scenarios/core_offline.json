@@ -1,0 +1,32 @@
+{
+  "name": "core_offline",
+  "description": "Core should be up but stops answering: llm_unreachable, a local command still works, then recovery to idle.",
+  "setup": [
+    { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 12, "ram_pct": 41, "temp_c": 58.5, "disk_write_mb_24h": 37.2 },
+      "llm": { "power": "up", "link": "up", "service": "ready", "model_loaded": "qwen3.5-9b-q4_k_m" },
+      "voice": { "status": "ok", "wake_word": "active" } } }
+  ],
+  "steps": [
+    { "at": 1500, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 12, "ram_pct": 41, "temp_c": 58.5, "disk_write_mb_24h": 37.2 },
+      "llm": { "power": "unknown", "link": "up", "service": "down" },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 1500, "emit": { "type": "state.changed", "payload": { "state": "llm_unreachable", "code": "CORE_UNREACHABLE" } } },
+    { "at": 1500, "emit": { "type": "alert", "payload": { "alert_id": "al-core-1", "level": "warn", "code": "CORE_UNREACHABLE", "message": "Core offline. Local commands still work; other requests are queued." } } },
+    { "at": 4000, "emit": { "type": "state.changed", "payload": { "state": "listening" } } },
+    { "at": 4000, "gen": "mic_levels", "args": { "duration_ms": 1300, "seed": 14 } },
+    { "at": 5400, "emit": { "type": "transcript.final", "payload": { "utterance_id": "u1", "role": "user", "text": "What time is it?", "source": "voice" } } },
+    { "at": 5400, "emit": { "type": "state.changed", "payload": { "state": "thinking" } } },
+    { "at": 5800, "gen": "tts_envelope", "args": { "duration_ms": 1500, "seed": 15 } },
+    { "at": 5800, "emit": { "type": "state.changed", "payload": { "state": "speaking" } } },
+    { "at": 5800, "gen": "assistant_reply", "args": { "utterance_id": "a1", "text": "It's 7:42." } },
+    { "at": 7400, "emit": { "type": "state.changed", "payload": { "state": "llm_unreachable", "code": "CORE_UNREACHABLE" } } },
+    { "at": 13000, "emit": { "type": "host.status", "payload": {
+      "pi": { "cpu_pct": 12, "ram_pct": 41, "temp_c": 58.5, "disk_write_mb_24h": 37.2 },
+      "llm": { "power": "up", "link": "up", "service": "ready", "model_loaded": "qwen3.5-9b-q4_k_m" },
+      "voice": { "status": "ok", "wake_word": "active" } } } },
+    { "at": 13000, "emit": { "type": "state.changed", "payload": { "state": "idle" } } },
+    { "at": 13000, "emit": { "type": "alert", "payload": { "alert_id": "al-core-2", "level": "info", "code": "CORE_RECOVERED", "message": "Core back online. Delivering 1 queued request." } } }
+  ]
+}
