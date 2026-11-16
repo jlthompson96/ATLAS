@@ -1,0 +1,70 @@
+# atlas-research.service: Research sandbox, no network, talks to atlas-egress over a Unix socket.
+# Source of truth: contracts/services.md (user, credentials, sockets, ports, sandbox baseline). Status: Phase 5.
+# TEMPLATE: the module below does not exist yet (Phase 5); provision-pi.sh installs but does not enable it.
+#
+# Relaxations of the services.md section 5 baseline (each is also marked RELAXED where it applies):
+#   PrivateNetwork=yes (services.md section 5): no network at all. The only way out is the Unix socket
+#     /run/atlas/egress-research.sock to atlas-egress, which enforces budgets and provenance (PLAN 2.13).
+
+[Unit]
+Description=ATLAS research: Research sandbox, no network, talks to atlas-egress over a Unix socket
+Requires=nftables.service
+After=nftables.service
+# Audit is mandatory: no audit socket, no service (fail closed).
+Requires=atlas-audit.socket
+After=atlas-audit.socket
+
+[Service]
+Type=simple
+User=atlas-research
+Group=atlas-research
+# Membership of the shared socket groups (see the .socket units and contracts/proposals).
+SupplementaryGroups=atlas-audit-clients atlas-core-clients
+
+# --- services.md section 5 baseline ---
+DynamicUser=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+# ADDED PrivateNetwork: the services.md addition for atlas-research (stricter, not looser).
+PrivateNetwork=yes
+StateDirectory=atlas/research
+StateDirectoryMode=0700
+
+# --- additional hardening (does not relax the baseline) ---
+CapabilityBoundingSet=
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=yes
+RemoveIPC=yes
+UMask=0077
+
+# --- environment ---
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/var/lib/atlas/current/backend
+
+# --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
+ExecStart=/var/lib/atlas/current/venv/atlas-research/bin/python -m atlas.research
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

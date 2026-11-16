@@ -1,0 +1,80 @@
+# atlas-ui.service: Static HUD and /ws/events server, TLS, device pairing.
+# Source of truth: contracts/services.md (user, credentials, sockets, ports, sandbox baseline). Status: Phase 2.
+# TEMPLATE: the module below does not exist yet (Phase 2); provision-pi.sh installs but does not enable it.
+#
+# Relaxations of the services.md section 5 baseline (each is also marked RELAXED where it applies):
+#   IPAddressAllow: loopback here, plus the home LAN (services.md section 5). The LAN CIDR is a site value:
+#     provision-pi.sh writes /etc/systemd/system/atlas-ui.service.d/lan.conf (IPAddressAllow=$ATLAS_LAN_CIDR);
+#     IPAddressAllow is additive across drop-ins.
+#   RestrictAddressFamilies: AF_INET AF_INET6 added to serve HTTPS and WSS.
+#   CapabilityBoundingSet/AmbientCapabilities=CAP_NET_BIND_SERVICE: bind :443 as a non-root user.
+
+[Unit]
+Description=ATLAS ui: Static HUD and /ws/events server, TLS, device pairing
+Requires=nftables.service
+After=nftables.service
+# Audit is mandatory: no audit socket, no service (fail closed).
+Requires=atlas-audit.socket
+After=atlas-audit.socket
+
+[Service]
+Type=simple
+User=atlas-ui
+Group=atlas-ui
+# Membership of the shared socket groups (see the .socket units and contracts/proposals).
+SupplementaryGroups=atlas-audit-clients atlas-core-clients
+
+# --- services.md section 5 baseline ---
+DynamicUser=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+IPAddressDeny=any
+# RELAXED IPAddressAllow: see the header comment.
+IPAddressAllow=localhost
+# RELAXED RestrictAddressFamilies: see the header comment.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=atlas/ui
+StateDirectoryMode=0700
+
+# --- additional hardening (does not relax the baseline) ---
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=yes
+RemoveIPC=yes
+UMask=0077
+
+# --- secrets: systemd-creds, readable only by this unit (services.md section 4) ---
+LoadCredentialEncrypted=tls-key:/var/lib/atlas/credentials/atlas-ui/tls-key.cred
+LoadCredentialEncrypted=device-token-key:/var/lib/atlas/credentials/atlas-ui/device-token-key.cred
+LoadCredentialEncrypted=stepup-pin-hash:/var/lib/atlas/credentials/atlas-ui/stepup-pin-hash.cred
+
+# --- environment ---
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/var/lib/atlas/current/backend
+
+# --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
+ExecStart=/var/lib/atlas/current/venv/atlas-ui/bin/python -m atlas.ui_server
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

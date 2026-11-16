@@ -1,0 +1,79 @@
+# atlas-core.service: Orchestrator, policy engine, task queue, state machine, power controller.
+# Source of truth: contracts/services.md (user, credentials, sockets, ports, sandbox baseline). Status: Phase 1.
+#
+# Relaxations of the services.md section 5 baseline (each is also marked RELAXED where it applies):
+#   IPAddressAllow: the desktop over WireGuard (10.77.0.2: LM Studio :1234, hostd :8770) and the Wake-on-LAN
+#     broadcast (255.255.255.255 here; provision-pi.sh adds the subnet broadcast in a lan.conf drop-in).
+#   RestrictAddressFamilies: AF_INET added for those two paths (nftables limits them to skuid atlas-core).
+
+[Unit]
+Description=ATLAS core: Orchestrator, policy engine, task queue, state machine, power controller
+Requires=nftables.service
+After=nftables.service
+# Audit is mandatory: no audit socket, no service (fail closed).
+Requires=atlas-audit.socket
+After=atlas-audit.socket
+# Socket-activated: systemd owns the listening socket and passes it as fd 3 (LISTEN_FDS).
+Requires=atlas-core.socket
+After=atlas-core.socket
+Wants=atlas-executor.socket atlas-fallback.socket
+
+[Service]
+Type=simple
+User=atlas-core
+Group=atlas-core
+# Membership of the shared socket groups (see the .socket units and contracts/proposals).
+SupplementaryGroups=atlas-audit-clients
+
+# --- services.md section 5 baseline ---
+DynamicUser=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+IPAddressDeny=any
+# RELAXED IPAddressAllow: see the header comment.
+IPAddressAllow=localhost 10.77.0.2 255.255.255.255
+# RELAXED RestrictAddressFamilies: see the header comment.
+RestrictAddressFamilies=AF_UNIX AF_INET
+StateDirectory=atlas/core
+StateDirectoryMode=0700
+
+# --- additional hardening (does not relax the baseline) ---
+CapabilityBoundingSet=
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=yes
+RemoveIPC=yes
+UMask=0077
+
+# --- secrets: systemd-creds, readable only by this unit (services.md section 4) ---
+LoadCredentialEncrypted=lmstudio-api-token:/var/lib/atlas/credentials/atlas-core/lmstudio-api-token.cred
+LoadCredentialEncrypted=approval-signing-key:/var/lib/atlas/credentials/atlas-core/approval-signing-key.cred
+
+# --- environment ---
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/var/lib/atlas/current/backend
+
+# --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
+ExecStart=/var/lib/atlas/current/venv/atlas-core/bin/python -m atlas.core
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

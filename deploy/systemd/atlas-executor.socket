@@ -1,0 +1,17 @@
+# atlas-executor.socket: /run/atlas/executor.sock
+# Client: atlas-core only. Group atlas-core must contain no other member than the atlas-core user.
+# Mode 0660 and a group that only the permitted clients belong to (contracts/services.md section 2).
+
+[Unit]
+Description=ATLAS executor socket
+
+[Socket]
+ListenStream=/run/atlas/executor.sock
+SocketUser=atlas-executor
+SocketGroup=atlas-core
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

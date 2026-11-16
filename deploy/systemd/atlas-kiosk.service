@@ -1,0 +1,70 @@
+# atlas-kiosk.service: Chromium kiosk session (loopback only).
+# Source of truth: contracts/services.md (user, credentials, sockets, ports, sandbox baseline). Status: Phase 2.
+# TEMPLATE: the executable below is a placeholder until this service exists; provision-pi.sh installs but does not enable it.
+#
+# Relaxations of the services.md section 5 baseline (each is also marked RELAXED where it applies):
+#   RestrictAddressFamilies: AF_INET AF_INET6 for the HUD on https://127.0.0.1 (loopback only via IPAddressAllow).
+#   PrivateDevices=no: Chromium needs the GPU (/dev/dri) and input devices.
+#   MemoryDenyWriteExecute=no: Chromium's JIT needs writable+executable memory.
+
+[Unit]
+Description=ATLAS kiosk: Chromium kiosk session (loopback only)
+Requires=nftables.service
+After=nftables.service
+
+[Service]
+Type=simple
+User=atlas-kiosk
+Group=atlas-kiosk
+
+# --- services.md section 5 baseline ---
+DynamicUser=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# RELAXED PrivateDevices: see the header comment.
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# RELAXED MemoryDenyWriteExecute: see the header comment.
+MemoryDenyWriteExecute=no
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+IPAddressDeny=any
+# RELAXED IPAddressAllow: see the header comment.
+IPAddressAllow=localhost
+# RELAXED RestrictAddressFamilies: see the header comment.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=atlas/kiosk
+StateDirectoryMode=0700
+
+# --- additional hardening (does not relax the baseline) ---
+CapabilityBoundingSet=
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=yes
+RemoveIPC=yes
+UMask=0077
+
+# --- environment ---
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/var/lib/atlas/current/backend
+
+# --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
+# PLACEHOLDER: labwc session wrapper installed by deploy/kiosk in Phase 2; Chromium opens https://127.0.0.1.
+ExecStart=/var/lib/atlas/current/kiosk/bin/atlas-kiosk-session
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
