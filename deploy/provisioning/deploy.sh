@@ -57,8 +57,10 @@ mkdir -p "$stage"
 log "== building release $version"
 git archive --format=tar HEAD backend/atlas backend/pyproject.toml contracts deploy/provisioning/services.conf \
   $(git ls-files 'backend/requirements-*.lock' | grep -v 'requirements-dev.lock') | tar -x -C "$stage"
-# Never ship tests or caches (git archive of backend/atlas contains none, but be explicit).
+# Never ship tests or caches (git archive of backend/atlas contains none, but be explicit), nor the dev-only mock event
+# server ("Never deployed", contracts/services.md section 2).
 find "$stage" -name __pycache__ -prune -exec rm -rf {} +
+rm -rf "$stage/backend/atlas/ui_server/mock"
 
 # Wheels for each per-service lock: downloaded on this Mac, hash-checked against the lock, installed offline on the Pi.
 pip=python3
