@@ -1,0 +1,95 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Orb component, static tier: a snapshot per state (§8 Phase 2: snapshot tests for every state) > error 1`] = `
+{
+  "ariaLabel": "ATLAS state: ERROR: token rejected",
+  "label": "ERROR: token rejected",
+  "progress": undefined,
+  "segments": [],
+  "shape": "broken",
+  "stages": [],
+  "state": "error",
+}
+`;
+
+exports[`Orb component, static tier: a snapshot per state (§8 Phase 2: snapshot tests for every state) > idle 1`] = `
+{
+  "ariaLabel": "ATLAS state: STANDBY",
+  "label": "STANDBY",
+  "progress": undefined,
+  "segments": [],
+  "shape": "ring",
+  "stages": [],
+  "state": "idle",
+}
+`;
+
+exports[`Orb component, static tier: a snapshot per state (§8 Phase 2: snapshot tests for every state) > listening 1`] = `
+{
+  "ariaLabel": "ATLAS state: LISTENING",
+  "label": "LISTENING",
+  "progress": undefined,
+  "segments": [],
+  "shape": "ring-wide",
+  "stages": [],
+  "state": "listening",
+}
+`;
+
+exports[`Orb component, static tier: a snapshot per state (§8 Phase 2: snapshot tests for every state) > llm_unreachable 1`] = `
+{
+  "ariaLabel": "ATLAS state: CORE OFFLINE · LOCAL MODE",
+  "label": "CORE OFFLINE · LOCAL MODE",
+  "progress": undefined,
+  "segments": [],
+  "shape": "broken-grey",
+  "stages": [],
+  "state": "llm_unreachable",
+}
+`;
+
+exports[`Orb component, static tier: a snapshot per state (§8 Phase 2: snapshot tests for every state) > speaking 1`] = `
+{
+  "ariaLabel": "ATLAS state: SPEAKING",
+  "label": "SPEAKING",
+  "progress": undefined,
+  "segments": [],
+  "shape": "wave",
+  "stages": [],
+  "state": "speaking",
+}
+`;
+
+exports[`Orb component, static tier: a snapshot per state (§8 Phase 2: snapshot tests for every state) > thinking 1`] = `
+{
+  "ariaLabel": "ATLAS state: PROCESSING",
+  "label": "PROCESSING",
+  "progress": undefined,
+  "segments": [],
+  "shape": "arcs",
+  "stages": [],
+  "state": "thinking",
+}
+`;
+
+exports[`Orb component, static tier: a snapshot per state (§8 Phase 2: snapshot tests for every state) > waking_host 1`] = `
+{
+  "ariaLabel": "ATLAS state: WAKING CORE · 12 s",
+  "label": "WAKING CORE · 12 s",
+  "progress": "12000",
+  "segments": [
+    "done",
+    "active",
+    "pending",
+    "pending",
+  ],
+  "shape": "segments",
+  "stages": [
+    "done:✓ Packet done",
+    "active:◔ Link in progress",
+    "pending:· API pending",
+    "pending:· Model pending",
+  ],
+  "state": "waking_host",
+}
+`;
