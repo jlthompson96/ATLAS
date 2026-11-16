@@ -1,0 +1,17 @@
+# atlas-audit.socket: /run/atlas/audit.sock
+# Every Pi service that writes audit records connects here; the actor comes from SO_PEERCRED, never the body.
+# Mode 0660 and a group that only the permitted clients belong to (contracts/services.md section 2).
+
+[Unit]
+Description=ATLAS audit socket
+
+[Socket]
+ListenStream=/run/atlas/audit.sock
+SocketUser=atlas-audit
+SocketGroup=atlas-audit-clients
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

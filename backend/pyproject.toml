@@ -8,6 +8,12 @@ requires-python = ">=3.13"
 dependencies = []
 
 [project.optional-dependencies]
+# Pi runtime, per service (contracts/services.md section 6). Installed only into the release of the
+# service that needs it, from a lock resolved for Linux aarch64 (scripts/relock-pi.sh).
+# atlas-audit: Ed25519 checkpoint signatures (not in the standard library).
+audit = [
+    "cryptography>=46,<48",
+]
 # Dev-machine tooling only: the mock event server and contract validation. Never installed on the Pi.
 mock = [
     "websockets>=17",

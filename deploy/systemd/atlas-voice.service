@@ -1,0 +1,73 @@
+# atlas-voice.service: Wake word, VAD, STT, TTS, AEC routing.
+# Source of truth: contracts/services.md (user, credentials, sockets, ports, sandbox baseline). Status: Phase 3.
+# TEMPLATE: the module below does not exist yet (Phase 3); provision-pi.sh installs but does not enable it.
+#
+# Relaxations of the services.md section 5 baseline (each is also marked RELAXED where it applies):
+#   PrivateDevices=no: audio devices (PipeWire/ALSA).
+#   MemoryMax=1300M: sum of the PLAN 3.1 budgets for wake word + VAD (150 MB), STT (800 MB), TTS (300 MB).
+#   TODO(VM): measure whether MemoryDenyWriteExecute=yes works here (JIT or W+X mappings); relax only if measured necessary.
+#   RestrictRealtime=no: real-time audio scheduling.
+
+[Unit]
+Description=ATLAS voice: Wake word, VAD, STT, TTS, AEC routing
+Requires=nftables.service
+After=nftables.service
+# Audit is mandatory: no audit socket, no service (fail closed).
+Requires=atlas-audit.socket
+After=atlas-audit.socket
+
+[Service]
+Type=simple
+User=atlas-voice
+Group=atlas-voice
+# Membership of the shared socket groups (see the .socket units and contracts/proposals).
+SupplementaryGroups=atlas-audit-clients atlas-core-clients
+
+# --- services.md section 5 baseline ---
+DynamicUser=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# RELAXED PrivateDevices: see the header comment.
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+StateDirectory=atlas/voice
+StateDirectoryMode=0700
+
+# --- additional hardening (does not relax the baseline) ---
+CapabilityBoundingSet=
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+ProcSubset=pid
+# RELAXED RestrictRealtime: see the header comment.
+RestrictRealtime=no
+RemoveIPC=yes
+UMask=0077
+MemoryMax=1300M
+
+# --- environment ---
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/var/lib/atlas/current/backend
+
+# --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
+ExecStart=/var/lib/atlas/current/venv/atlas-voice/bin/python -m atlas.voice
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

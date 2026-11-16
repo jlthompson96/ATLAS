@@ -1,0 +1,19 @@
+# atlas-egress-research.socket: /run/atlas/egress-research.sock
+# Client: atlas-research only (research fetch/search API, PLAN 2.13).
+# Mode 0660 and a group that only the permitted clients belong to (contracts/services.md section 2).
+# PHASE 5: the research API is not implemented (backend/atlas/egress/research_api.py is an interface only). Installed but not enabled; atlas-egress must gain socket activation in the same change that implements it.
+
+[Unit]
+Description=ATLAS egress-research socket
+
+[Socket]
+ListenStream=/run/atlas/egress-research.sock
+SocketUser=atlas-egress
+SocketGroup=atlas-research
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+Service=atlas-egress.service
+
+[Install]
+WantedBy=sockets.target

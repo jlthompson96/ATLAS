@@ -1,0 +1,73 @@
+# atlas-audit.service: Append-only hash-chained audit log.
+# Source of truth: contracts/services.md (user, credentials, sockets, ports, sandbox baseline). Status: Phase 0.
+#
+# Relaxations of the services.md section 5 baseline (each is also marked RELAXED where it applies):
+#   CapabilityBoundingSet/AmbientCapabilities=CAP_LINUX_IMMUTABLE: chattr +a on the active segment and
+#     chattr +i on sealed ones (PLAN 2.12). The only service with a capability besides atlas-ui.
+
+[Unit]
+Description=ATLAS audit: Append-only hash-chained audit log
+Requires=nftables.service
+After=nftables.service
+# Socket-activated: systemd owns the listening socket and passes it as fd 3 (LISTEN_FDS).
+Requires=atlas-audit.socket
+After=atlas-audit.socket
+
+[Service]
+Type=simple
+User=atlas-audit
+Group=atlas-audit
+
+# --- services.md section 5 baseline ---
+DynamicUser=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+StateDirectory=atlas/audit
+StateDirectoryMode=0700
+
+# --- additional hardening (does not relax the baseline) ---
+CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
+AmbientCapabilities=CAP_LINUX_IMMUTABLE
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=yes
+RemoveIPC=yes
+UMask=0077
+
+# --- secrets: systemd-creds, readable only by this unit (services.md section 4) ---
+LoadCredentialEncrypted=audit-checkpoint-key:/var/lib/atlas/credentials/atlas-audit/audit-checkpoint-key.cred
+LoadCredentialEncrypted=audit-segment-master-key:/var/lib/atlas/credentials/atlas-audit/audit-segment-master-key.cred
+
+# --- environment ---
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/var/lib/atlas/current/backend
+Environment=ATLAS_AUDIT_DATA_DIR=/var/lib/atlas/audit
+# Real chattr +a is required in production; the service refuses to start if it does not work here.
+Environment=ATLAS_AUDIT_REQUIRE_APPEND_ONLY=1
+
+# --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
+ExecStart=/var/lib/atlas/current/venv/atlas-audit/bin/python -m atlas.audit serve
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

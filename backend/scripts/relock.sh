@@ -12,7 +12,7 @@ python3 -m venv "$tmp/venv"
   --quiet \
   --generate-hashes \
   --strip-extras \
-  --extra dev --extra mock \
+  --extra dev --extra mock --extra audit \
   --output-file requirements-dev.lock \
   pyproject.toml
 echo "Wrote requirements-dev.lock. Review the diff before committing."

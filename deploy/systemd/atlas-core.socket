@@ -1,0 +1,17 @@
+# atlas-core.socket: /run/atlas/core.sock
+# Clients: atlas-ui, atlas-voice, atlas-google, atlas-discord, atlas-panels, atlas-market, atlas-research, atlas-fallback.
+# Mode 0660 and a group that only the permitted clients belong to (contracts/services.md section 2).
+
+[Unit]
+Description=ATLAS core socket
+
+[Socket]
+ListenStream=/run/atlas/core.sock
+SocketUser=atlas-core
+SocketGroup=atlas-core-clients
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
