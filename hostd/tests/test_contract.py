@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -20,7 +21,9 @@ from atlas_hostd.models import LlmServerKind
 from atlas_hostd.platform.fake import FakePlatform
 from atlas_hostd.service import ROUTES, HostdApp, Listener
 
-SPEC_PATH = Path(__file__).resolve().parents[2] / "contracts" / "hostd.v1.yaml"
+SPEC_PATH = (
+    Path(os.environ.get("ATLAS_CONTRACTS_DIR") or Path(__file__).resolve().parents[2] / "contracts") / "hostd.v1.yaml"
+)
 SPEC: dict[str, Any] = yaml.safe_load(SPEC_PATH.read_text())
 BASE = "urn:atlas:hostd.v1"
 REGISTRY = Registry().with_resource(BASE, Resource.from_contents(SPEC, default_specification=DRAFT202012))
@@ -55,7 +58,8 @@ def _resolve_ref(ref: str) -> dict[str, Any]:
 
 def response_schema(operation: dict[str, Any], status: int) -> dict[str, Any] | None:
     """The JSON Schema for ``operation``'s ``status`` response, anchored to the spec document; ``None`` for no body."""
-    spec_response = operation["responses"].get(str(status))
+    # Statuses not listed explicitly fall under the operation's `default` response (1.1.0).
+    spec_response = operation["responses"].get(str(status), operation["responses"].get("default"))
     assert spec_response is not None, f"status {status} is not documented for {operation['operationId']}"
     if "$ref" in spec_response:
         spec_response = _resolve_ref(spec_response["$ref"])
@@ -188,6 +192,10 @@ async def _lease_delete_204(app: HostdApp, p: FakePlatform) -> tuple[str, str, R
     return "DELETE", "/v1/leases/{lease_id}", await call(app, "DELETE", "/v1/leases/lease-1")
 
 
+async def _lease_delete_400(app: HostdApp, p: FakePlatform) -> tuple[str, str, Response]:
+    return "DELETE", "/v1/leases/{lease_id}", await call(app, "DELETE", "/v1/leases/-bad")
+
+
 async def _lease_delete_403(app: HostdApp, p: FakePlatform) -> tuple[str, str, Response]:
     return "DELETE", "/v1/leases/{lease_id}", await call(app, "DELETE", "/v1/leases/lease-1", peer="127.0.0.1")
 
@@ -227,6 +235,7 @@ CASES: dict[tuple[str, int], Case] = {
     ("putLease", 400): _lease_put_400,
     ("putLease", 403): _lease_put_403,
     ("deleteLease", 204): _lease_delete_204,
+    ("deleteLease", 400): _lease_delete_400,
     ("deleteLease", 403): _lease_delete_403,
     ("postHelperActivity", 204): _helper_204,
     ("postHelperActivity", 400): _helper_400,
@@ -235,7 +244,18 @@ CASES: dict[tuple[str, int], Case] = {
 
 
 def _documented() -> list[tuple[str, int]]:
-    return [(op["operationId"], int(code)) for op in spec_operations().values() for code in op["responses"]]
+    return [
+        (op["operationId"], int(code))
+        for op in spec_operations().values()
+        for code in op["responses"]
+        if code != "default"
+    ]
+
+
+def test_every_operation_has_a_default_error_response() -> None:
+    for op in spec_operations().values():
+        assert "default" in op["responses"], op["operationId"]
+        assert response_schema(op, 418) == {"$ref": BASE + "#/components/schemas/Error"}
 
 
 @pytest.mark.parametrize(("operation_id", "status"), _documented())
@@ -277,13 +297,20 @@ async def test_every_refusal_reason_validates(app: HostdApp, platform: FakePlatf
     conforms("POST", "/v1/sleep", response)
 
 
-async def test_unrouted_errors_use_the_error_schema(app: HostdApp) -> None:
-    error_validator = jsonschema.Draft202012Validator(
-        {"$ref": BASE + "#/components/schemas/Error"}, registry=REGISTRY, format_checker=_FORMATS
-    )
-    for response in (
-        await call(app, "GET", "/v1/missing"),
-        await call(app, "POST", "/v1/status"),
-    ):
-        assert response.status in (404, 405)
-        error_validator.validate(response.body)
+async def test_errors_outside_the_listed_statuses_validate_against_default(app: HostdApp) -> None:
+    not_found = await call(app, "GET", "/v1/missing")
+    wrong_method = await call(app, "POST", "/v1/status")
+    assert (not_found.status, wrong_method.status) == (404, 405)
+    assert not_found.body is not None and not_found.body["code"] == "NOT_FOUND"
+    assert wrong_method.body is not None and wrong_method.body["code"] == "METHOD_NOT_ALLOWED"
+    conforms("GET", "/v1/status", not_found)
+    conforms("GET", "/v1/status", wrong_method)
+
+
+async def test_invalid_lease_id_codes(app: HostdApp) -> None:
+    put = await call(app, "PUT", "/v1/leases/-bad", {"ttl_s": 60, "reason": "backup"})
+    delete = await call(app, "DELETE", "/v1/leases/-bad")
+    for response in (put, delete):
+        assert response.status == 400 and response.body is not None
+        assert response.body["code"] == "INVALID_LEASE_ID"
+    conforms("PUT", "/v1/leases/{lease_id}", put)

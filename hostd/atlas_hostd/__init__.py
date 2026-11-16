@@ -6,4 +6,4 @@ from typing import Final
 
 __version__: Final = "0.1.0"
 #: hostd.v1.yaml `info.version` this implementation targets.
-API_VERSION: Final = "1.0.0"
+API_VERSION: Final = "1.1.0"

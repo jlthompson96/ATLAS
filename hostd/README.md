@@ -27,6 +27,20 @@ completes the checklist below.
 
 No runtime dependencies (standard library only). Dev tooling comes from `backend/requirements-dev.lock`.
 
+## Behaviour worth knowing (hostd.v1 1.1.0)
+
+- **Wake claims.** The wake-cycle start is `last_resume_at` if the machine resumed since boot, else `booted_at` (a
+  Wake-on-LAN from full shutdown is a boot, not a resume). A claim is accepted only if
+  `first_packet_at - 5 s <= cycle start <= first_packet_at + 90 s` (both bounds inclusive) and the cycle's wake source
+  is `network` or `unknown`; otherwise `not_atlas_woken`. `power.last_wake_source` describes the cycle start and is
+  `unknown` for a cold boot.
+- **No usable sleep state.** `power.preferred_sleep_state` is `null` exactly when `sleep_states_available` is empty, and
+  `sleep_unsupported` is then a refusal reason.
+- **Errors.** 400 `INVALID_BODY`, `BODY_TOO_LARGE`, `LEASE_LIMIT`, `INVALID_LEASE_ID` (malformed `lease_id` on PUT and
+  DELETE; DELETE of a well-formed unknown id is 204); 403 `FORBIDDEN_SOURCE`; 404 `NOT_FOUND`; 405
+  `METHOD_NOT_ALLOWED`; 500 `INTERNAL_ERROR` (unexpected failure); 503 `NVML_UNAVAILABLE` on `/v1/gpu` only.
+- Tests load the contract from `ATLAS_CONTRACTS_DIR` if set, else the repo's `contracts/`.
+
 ## Run
 
 ```sh
@@ -96,6 +110,7 @@ Everything below is **unverified**. Tick each item and note surprises in the Pha
 **Platform reads** (compare each with `GET /v1/status` and the Windows tool)
 - [ ] `os.name` / `os.build` match `winver` (Windows 11 reports "Windows 11 ...").
 - [ ] `power.sleep_states_available` matches `powercfg /a` (S3 listed? Modern Standby? Hibernate?). Note the output on a non-English Windows.
+- [ ] `power.booted_at` matches the real boot time (`systeminfo`, Task Manager uptime) within a few seconds.
 - [ ] `boot_id` is stable across a hostd restart and across sleep/resume, and changes after a reboot. (Derived from `GetTickCount64`; confirm it keeps counting through sleep and restarts at boot with Fast Startup off.)
 - [ ] After a sleep/resume: `power.last_resume_at` matches the Power-Troubleshooter event (`wevtutil qe System /q:"*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and (EventID=1)]]" /c:1 /rd:true /f:xml`). Check the `WakeTime` and wake-source field names match what `parsers.parse_resume_event_xml` expects.
 - [ ] `power.last_wake_source`: wake by magic packet gives `network`; by power button `power_button`; by key press `input_device`; by scheduled task `timer`. Record what Windows reports when it cannot tell (`unknown`).
@@ -118,6 +133,7 @@ Everything below is **unverified**. Tick each item and note surprises in the Pha
 - [ ] `POST /v1/sleep` from the Pi (conditions satisfied) returns 202, then the desktop **sleeps, not hibernates and not shuts down** (power LED, `powercfg /a`, Power-Troubleshooter event shows the sleep state). Record S3 vs Modern Standby.
 - [ ] Wake-on-LAN from that state with `wol.py --poll`: record the time to `/v1/health` (feeds CT-1..CT-4, B6). Repeat 30 times for the cold-start matrix.
 - [ ] After the WoL resume, `last_wake_source` is `network` or `unknown`, and a sleep request with the wake claim is accepted after 2 minutes (not before: `resume_grace`).
+- [ ] Cold-boot claim: shut the desktop down, wake it with `wol.py`, and after 2 minutes a sleep request with the Pi's claim is accepted (cycle start is `booted_at`; `last_wake_source` is `unknown` or `network`). Record what Windows reports.
 - [ ] OW-1 support: wake the host with the power button or keyboard, then send a sleep request with `wake: null` or with the Pi's claim: refused `not_atlas_woken`. Set `allow_sleep_if_user_woke = true` and it is accepted.
 - [ ] FI-9: reboot and stay at the sign-in screen; hostd (as a service) answers `/v1/health` and `/v1/status` with `helper_connected: false`, and a sleep request is judged on lease/GPU/claim only.
 - [ ] FI-10: start a GPU-heavy app; `/v1/gpu` `vram_free_mb` drops accordingly and `foreign_gpu_busy` / sleep refusal `foreign_gpu_busy` follow.

@@ -248,3 +248,44 @@ async def test_status_eligibility_matches_host_side_conditions(app: HostdApp, pl
     status = (await call(app, "GET", "/v1/status")).body
     assert status is not None
     assert status["sleep_eligibility"] == {"eligible": False, "reasons": ["fullscreen_app"]}
+
+
+# ---- wake-claim window boundaries (hostd.v1 1.1.0): first_packet_at - 5 s <= cycle start <= first_packet_at + 90 s
+
+
+@pytest.mark.parametrize(
+    ("offset_s", "accepted"),
+    [(-6, False), (-5, True), (0, True), (90, True), (91, False)],
+)
+async def test_claim_window_boundaries_for_a_resume(
+    app: HostdApp, platform: FakePlatform, offset_s: int, accepted: bool
+) -> None:
+    # offset_s = cycle start minus first_packet_at
+    resume_at = EPOCH - timedelta(minutes=30)
+    platform.set_resume(resume_at, WakeSource.NETWORK)
+    first_packet = resume_at - timedelta(seconds=offset_s)
+    status, body = await sleep(app, first_packet_at=first_packet)
+    assert status == (202 if accepted else 409), body
+    if not accepted:
+        assert body["reasons"] == ["not_atlas_woken"]
+
+
+@pytest.mark.parametrize(
+    ("offset_s", "accepted"),
+    [(-6, False), (-5, True), (0, True), (90, True), (91, False)],
+)
+async def test_claim_window_boundaries_for_a_cold_boot(
+    app: HostdApp, platform: FakePlatform, offset_s: int, accepted: bool
+) -> None:
+    platform.resume = None  # cycle start is booted_at, source unknown
+    first_packet = platform.boot_at - timedelta(seconds=offset_s)
+    status, body = await sleep(app, first_packet_at=first_packet)
+    assert status == (202 if accepted else 409), body
+    if not accepted:
+        assert body["reasons"] == ["not_atlas_woken"]
+
+
+async def test_old_failed_wake_attempt_cannot_claim_a_much_later_resume(app: HostdApp, platform: FakePlatform) -> None:
+    platform.set_resume(EPOCH - timedelta(minutes=30), WakeSource.NETWORK)
+    status, _ = await sleep(app, first_packet_at=EPOCH - timedelta(hours=3))
+    assert status == 409

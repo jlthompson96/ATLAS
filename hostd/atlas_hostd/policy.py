@@ -19,6 +19,8 @@ from atlas_hostd.models import (
     WakeSource,
 )
 
+#: The Pi abandons a wake after 60 s; a cycle starting later than this after the first packet was not that wake.
+CLAIM_WINDOW_S = 90
 _CLAIM_SOURCES = frozenset({WakeSource.NETWORK, WakeSource.UNKNOWN})
 
 
@@ -50,11 +52,13 @@ def current_cycle(boot_time: datetime, resume: ResumeInfo | None) -> CycleInfo:
 
 
 def claim_is_valid(claim: WakeClaim | None, cycle: CycleInfo, skew_s: int) -> bool:
-    """Contract: accept only if the cycle began after ``first_packet_at`` minus the skew, and the Windows wake
-    source is ``network`` or ``unknown``."""
+    """hostd.v1 1.1.0: ``first_packet_at - skew <= cycle start <= first_packet_at + 90 s`` and the wake source is
+    ``network`` or ``unknown``. Both bounds are inclusive."""
     if claim is None:
         return False
     if cycle.started_at < claim.first_packet_at - timedelta(seconds=skew_s):
+        return False
+    if cycle.started_at > claim.first_packet_at + timedelta(seconds=CLAIM_WINDOW_S):
         return False
     return cycle.source in _CLAIM_SOURCES
 

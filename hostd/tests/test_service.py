@@ -10,7 +10,7 @@ from helpers import PI, call, post_helper, sleep_body
 
 from atlas_hostd.config import Config
 from atlas_hostd.models import LlmServerKind
-from atlas_hostd.platform.fake import EPOCH, FakePlatform
+from atlas_hostd.platform.fake import EPOCH, FakePlatform, make_gpu_sample
 from atlas_hostd.service import HostdApp, Listener
 
 # ---- access control ------------------------------------------------------------------------------------------
@@ -63,7 +63,7 @@ async def test_unknown_route_and_wrong_method(app: HostdApp) -> None:
 async def test_health(app: HostdApp, platform: FakePlatform) -> None:
     platform.advance(12)
     body = (await call(app, "GET", "/v1/health")).body
-    assert body == {"status": "ok", "api_version": "1.0.0", "boot_id": "boot-fake-0001", "uptime_s": 12}
+    assert body == {"status": "ok", "api_version": "1.1.0", "boot_id": "boot-fake-0001", "uptime_s": 12}
 
 
 async def test_gpu_report_and_nvml_unavailable(app: HostdApp, platform: FakePlatform) -> None:
@@ -87,6 +87,7 @@ async def test_status_reports_power_llm_and_leases(app: HostdApp, platform: Fake
     assert status["power"] == {
         "sleep_states_available": ["s3", "hibernate"],
         "preferred_sleep_state": "s3",
+        "booted_at": "2026-11-16T09:00:00Z",
         "last_resume_at": "2026-11-16T11:30:00Z",
         "last_wake_source": "network",
     }
@@ -100,7 +101,10 @@ async def test_status_with_no_resume_and_signed_out(app: HostdApp, platform: Fak
     platform.signed_in = False
     status = (await call(app, "GET", "/v1/status")).body
     assert status is not None
-    assert status["power"]["last_resume_at"] is None and status["power"]["last_wake_source"] is None
+    assert status["power"]["last_resume_at"] is None
+    assert status["power"]["booted_at"] == "2026-11-16T09:00:00Z"
+    # With no resume since boot, the wake-cycle start is the boot; Windows records no source for it.
+    assert status["power"]["last_wake_source"] == "unknown"
     assert status["activity"] == {
         "user_signed_in": False,
         "helper_connected": False,
@@ -262,7 +266,7 @@ def _sleep(**changes: Any) -> dict[str, Any]:
 async def test_bad_sleep_bodies(app: HostdApp, platform: FakePlatform, body: object) -> None:
     response = await call(app, "POST", "/v1/sleep", body)
     assert response.status == 400
-    assert response.body is not None and response.body["code"] == "BAD_REQUEST"
+    assert response.body is not None and response.body["code"] == "INVALID_BODY"
     assert platform.suspend_calls == []
 
 
@@ -304,3 +308,23 @@ async def test_validation_errors_do_not_echo_input(app: HostdApp) -> None:
 def test_default_config_never_binds_wildcard() -> None:
     assert Config().listener.address == "10.77.0.2"
     assert Config().helper_listener.address == "127.0.0.1"
+
+
+async def test_no_sleep_state_gives_null_preferred_and_unsupported_reason(
+    app: HostdApp, platform: FakePlatform
+) -> None:
+    platform.states = ()
+    status = (await call(app, "GET", "/v1/status")).body
+    assert status is not None
+    assert status["power"]["sleep_states_available"] == []
+    assert status["power"]["preferred_sleep_state"] is None
+    assert "sleep_unsupported" in status["sleep_eligibility"]["reasons"]
+
+
+async def test_gpu_utilisation_ignored_as_foreign_load_while_a_lease_is_held(
+    app: HostdApp, platform: FakePlatform
+) -> None:
+    platform.gpu = make_gpu_sample(util_pct=90)
+    await call(app, "PUT", "/v1/leases/l1", {"ttl_s": 60, "reason": "interactive_session"})
+    activity = (await call(app, "GET", "/v1/activity")).body
+    assert activity is not None and activity["foreign_gpu_busy"] is False

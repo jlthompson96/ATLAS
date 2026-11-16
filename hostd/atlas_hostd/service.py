@@ -205,8 +205,10 @@ class HostdApp:
     def _policy_inputs(self, facts: _Facts) -> tuple[PolicyInputs, ActivitySnapshot, CycleInfo]:
         snap = self._activity.snapshot(facts.mono)
         cycle = current_cycle(self._boot_time, facts.resume)
+        leases = len(self._leases.active(facts.mono))
+        # Utilisation only counts as foreign load while the LLM server is idle, i.e. while no lease is held.
         gpu_busy = snap.gpu_heavy_process_count > 0 or (
-            facts.gpu is not None and facts.gpu.util_pct >= self._cfg.sleep.foreign_gpu_util_pct
+            leases == 0 and facts.gpu is not None and facts.gpu.util_pct >= self._cfg.sleep.foreign_gpu_util_pct
         )
         inputs = PolicyInputs(
             now=facts.now,
@@ -216,7 +218,7 @@ class HostdApp:
             input_idle_s=snap.input_idle_s,
             fullscreen_app=snap.fullscreen_app,
             foreign_gpu_busy=gpu_busy,
-            active_leases=len(self._leases.active(facts.mono)),
+            active_leases=leases,
         )
         return inputs, snap, cycle
 
@@ -266,9 +268,9 @@ class HostdApp:
 
     async def _get_status(self, request: Request) -> Response:
         facts = await self._facts()
-        inputs, snap, _ = self._policy_inputs(facts)
+        inputs, snap, cycle = self._policy_inputs(facts)
         reasons = host_refusals(inputs, self._cfg.sleep)
-        preferred = preferred_sleep_state(facts.sleep_states) or SleepState.HIBERNATE
+        preferred = preferred_sleep_state(facts.sleep_states)
         resume = facts.resume
         body = {
             "hostd_version": __version__,
@@ -277,9 +279,10 @@ class HostdApp:
             "os": {"name": self._os.name[:60], "build": self._os.build[:40]},
             "power": {
                 "sleep_states_available": [s.value for s in facts.sleep_states],
-                "preferred_sleep_state": preferred.value,
+                "preferred_sleep_state": None if preferred is None else preferred.value,
+                "booted_at": fmt_ts(self._boot_time),
                 "last_resume_at": None if resume is None else fmt_ts(resume.at),
-                "last_wake_source": None if resume is None else resume.source.value,
+                "last_wake_source": cycle.source.value,
             },
             "llm_server": {
                 "kind": facts.llm_kind.value,
@@ -306,23 +309,23 @@ class HostdApp:
 
     async def _post_helper_activity(self, request: Request) -> Response:
         if not _is_json(request):
-            return error_response(400, "BAD_REQUEST", "Content-Type must be application/json")
+            return error_response(400, "INVALID_BODY", "Content-Type must be application/json")
         try:
             report = parse_helper_report(request.body)
         except ValidationError as exc:
-            return error_response(400, "BAD_REQUEST", str(exc))
+            return error_response(400, "INVALID_BODY", str(exc))
         self._activity.record(report, now_mono=self._p.monotonic(), now_wall=self._p.now())
         return Response(204)
 
     async def _put_lease(self, request: Request, lease_id: str) -> Response:
         if not valid_id(lease_id):
-            return error_response(400, "BAD_REQUEST", "lease_id is not a valid id")
+            return error_response(400, "INVALID_LEASE_ID", "lease_id is not a valid id")
         if not _is_json(request):
-            return error_response(400, "BAD_REQUEST", "Content-Type must be application/json")
+            return error_response(400, "INVALID_BODY", "Content-Type must be application/json")
         try:
             lease_request = parse_lease_request(request.body)
         except ValidationError as exc:
-            return error_response(400, "BAD_REQUEST", str(exc))
+            return error_response(400, "INVALID_BODY", str(exc))
         try:
             lease = self._leases.put(
                 lease_id,
@@ -337,19 +340,20 @@ class HostdApp:
         return Response(200, self._lease_json(lease))
 
     async def _delete_lease(self, request: Request, lease_id: str) -> Response:
-        # Releasing a lease that does not exist (or whose id could not exist) is a no-op by contract.
-        if valid_id(lease_id):
-            self._leases.delete(lease_id)
-            await self._sync_keep_awake()
+        if not valid_id(lease_id):
+            return error_response(400, "INVALID_LEASE_ID", "lease_id is not a valid id")
+        # Releasing a well-formed lease id that does not exist is a no-op by contract.
+        self._leases.delete(lease_id)
+        await self._sync_keep_awake()
         return Response(204)
 
     async def _request_sleep(self, request: Request) -> Response:
         if not _is_json(request):
-            return error_response(400, "BAD_REQUEST", "Content-Type must be application/json")
+            return error_response(400, "INVALID_BODY", "Content-Type must be application/json")
         try:
             sleep_request = parse_sleep_request(request.body)
         except ValidationError as exc:
-            return error_response(400, "BAD_REQUEST", str(exc))
+            return error_response(400, "INVALID_BODY", str(exc))
         async with self._sleep_lock:
             replay = self._replay.get(sleep_request.request_id)
             if replay is not None:

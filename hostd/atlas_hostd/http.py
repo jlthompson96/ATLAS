@@ -33,6 +33,7 @@ _REASONS: Final = {
     404: "Not Found",
     405: "Method Not Allowed",
     409: "Conflict",
+    500: "Internal Server Error",
     503: "Service Unavailable",
 }
 
@@ -97,40 +98,40 @@ async def _read_request(reader: asyncio.StreamReader, peer: str) -> Request:
     try:
         head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), READ_TIMEOUT_S)
     except asyncio.LimitOverrunError as exc:
-        raise BadHttp("BAD_REQUEST", "request head too large") from exc
+        raise BadHttp("INVALID_BODY", "request head too large") from exc
     except (asyncio.IncompleteReadError, TimeoutError) as exc:
-        raise BadHttp("BAD_REQUEST", "incomplete request") from exc
+        raise BadHttp("INVALID_BODY", "incomplete request") from exc
     if len(head) > MAX_HEAD_BYTES:
-        raise BadHttp("BAD_REQUEST", "request head too large")
+        raise BadHttp("INVALID_BODY", "request head too large")
     try:
         text = head[:-4].decode("ascii")
     except UnicodeDecodeError as exc:
-        raise BadHttp("BAD_REQUEST", "request head is not ASCII") from exc
+        raise BadHttp("INVALID_BODY", "request head is not ASCII") from exc
     lines = text.split("\r\n")
     parts = lines[0].split(" ")
     if len(parts) != 3 or not parts[2].startswith("HTTP/1."):
-        raise BadHttp("BAD_REQUEST", "malformed request line")
+        raise BadHttp("INVALID_BODY", "malformed request line")
     method, target, _ = parts
     if not target.startswith("/"):
-        raise BadHttp("BAD_REQUEST", "request target must be a path")
+        raise BadHttp("INVALID_BODY", "request target must be a path")
     if len(lines) - 1 > MAX_HEADERS:
-        raise BadHttp("BAD_REQUEST", "too many headers")
+        raise BadHttp("INVALID_BODY", "too many headers")
     headers: dict[str, str] = {}
     for line in lines[1:]:
         name, sep, value = line.partition(":")
         if not sep or not name or name != name.strip():
-            raise BadHttp("BAD_REQUEST", "malformed header")
+            raise BadHttp("INVALID_BODY", "malformed header")
         key = name.lower()
         if key in headers and key in ("content-length", "transfer-encoding", "content-type"):
-            raise BadHttp("BAD_REQUEST", "duplicate header")
+            raise BadHttp("INVALID_BODY", "duplicate header")
         headers[key] = value.strip()
     if "transfer-encoding" in headers:
-        raise BadHttp("BAD_REQUEST", "transfer-encoding is not supported; send Content-Length")
+        raise BadHttp("INVALID_BODY", "transfer-encoding is not supported; send Content-Length")
     length = 0
     if "content-length" in headers:
         raw = headers["content-length"]
         if not raw.isascii() or not raw.isdigit() or len(raw) > 9:
-            raise BadHttp("BAD_REQUEST", "invalid Content-Length")
+            raise BadHttp("INVALID_BODY", "invalid Content-Length")
         length = int(raw)
         if length > MAX_BODY_BYTES:
             raise BadHttp("BODY_TOO_LARGE", "request body too large")
@@ -139,7 +140,7 @@ async def _read_request(reader: asyncio.StreamReader, peer: str) -> Request:
         try:
             body = await asyncio.wait_for(reader.readexactly(length), READ_TIMEOUT_S)
         except (asyncio.IncompleteReadError, TimeoutError) as exc:
-            raise BadHttp("BAD_REQUEST", "incomplete body") from exc
+            raise BadHttp("INVALID_BODY", "incomplete body") from exc
     return Request(method=method, target=target, content_type=headers.get("content-type"), body=body, peer=peer)
 
 
@@ -197,7 +198,7 @@ class HttpServer:
                 response = error_response(400, exc.code, exc.message)
             except Exception:
                 log.exception("unhandled error in %s handler", self._name)
-                response = error_response(503, "INTERNAL_ERROR", "internal error")
+                response = error_response(500, "INTERNAL_ERROR", "internal error")
             status = response.status
             await self._send(writer, response)
         except (ConnectionError, OSError):

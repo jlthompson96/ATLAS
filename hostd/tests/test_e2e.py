@@ -187,7 +187,7 @@ async def test_malformed_and_oversized_requests_are_400(platform: FakePlatform) 
         ):
             reply = await raw_request(port, payload)
             assert reply.status == 400, payload
-            assert reply.body["code"] in ("BAD_REQUEST", "BODY_TOO_LARGE")
+            assert reply.body["code"] in ("INVALID_BODY", "BODY_TOO_LARGE")
 
 
 async def test_slow_client_times_out_without_blocking_others(
