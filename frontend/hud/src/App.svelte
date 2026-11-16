@@ -2,6 +2,7 @@
   import { onMount, setContext } from 'svelte';
   import { HUD_CONTEXT } from './lib/ctx';
   import Shell from './lib/Shell.svelte';
+  import { startActivityPings } from './lib/protocol/activity';
   import { HudClient, defaultSocketUrl, type Logger } from './lib/protocol/client';
   import { HudStore } from './lib/state/hud.svelte';
   import { Settings } from './lib/state/settings.svelte';
@@ -41,7 +42,13 @@
     onResize();
     window.addEventListener('resize', onResize);
     client.connect();
+    const stopPings = startActivityPings({
+      target: window,
+      send: () => client.send('activity.ping', {}),
+      isHidden: () => document.hidden
+    });
     return () => {
+      stopPings();
       client.close();
       ticker.stop();
       mq.removeEventListener('change', onMq);

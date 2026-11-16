@@ -2,11 +2,11 @@
 // Source: contracts/events.v1.schema.json (via `npm run gen:types`).
 // A test and `npm run lint` fail if this file is stale.
 
-export const SCHEMA_REVISION = "1.0.0" as const;
+export const SCHEMA_REVISION = "1.1.0" as const;
 
 export const SERVER_TYPES = ["state.changed","audio.level","transcript.partial","transcript.final","assistant.delta","panel.update","host.status","task.progress","action.pending","action.resolved","alert","privacy.mode","clock.pong","sync.snapshot","stepup.granted","request.result"] as const;
 export type ServerType = (typeof SERVER_TYPES)[number];
-export const CLIENT_TYPES = ["text.input","ptt.start","ptt.stop","action.decide","task.kill","killswitch.all","privacy.set","portfolio.unlock","layout.save","clock.ping","sync.request","stepup.verify"] as const;
+export const CLIENT_TYPES = ["text.input","ptt.start","ptt.stop","action.decide","task.kill","killswitch.all","privacy.set","portfolio.unlock","layout.save","clock.ping","sync.request","stepup.verify","activity.ping"] as const;
 export type ClientType = (typeof CLIENT_TYPES)[number];
 
 /** Fields that must never be logged (x-atlas-sensitive). */
@@ -407,7 +407,7 @@ export type Alert = {
   message: ShortText;
 };
 
-/** Per device. While on, the server redacts personal/secret data for this device and stops sending transcript.* and assistant.delta. On every change the server follows with a fresh sync.snapshot. */
+/** Per device. While on, the server redacts personal/secret data for this device and stops sending transcript.* and assistant.delta. On every change the server follows with a fresh sync.snapshot. reason=inactivity: the device sent no interaction for its inactivity window; every client frame except clock.ping and sync.request counts as interaction, including activity.ping. */
 export type PrivacyMode = {
   on: boolean;
   reason: "user" | "inactivity";
@@ -555,4 +555,5 @@ export interface ClientPayloads {
   "clock.ping": ClockPing;
   "sync.request": SyncRequest;
   "stepup.verify": StepupVerify;
+  "activity.ping": Empty;
 }
