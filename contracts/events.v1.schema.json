@@ -3,7 +3,7 @@
   "$id": "urn:atlas:contracts:events:v1",
   "title": "ATLAS backend <-> HUD event stream, v1",
   "description": "Every WebSocket text frame on /ws/events is one JSON envelope. Validate server->client frames against #/$defs/ServerMessage and client->server frames against #/$defs/ClientMessage. Source: PLAN.md §4.5. Versioning rules: contracts/README.md.",
-  "x-atlas-schema-revision": "1.0.0",
+  "x-atlas-schema-revision": "1.1.0",
   "oneOf": [
     { "$ref": "#/$defs/ServerMessage" },
     { "$ref": "#/$defs/ClientMessage" }
@@ -70,7 +70,7 @@
               "enum": [
                 "text.input", "ptt.start", "ptt.stop", "action.decide", "task.kill",
                 "killswitch.all", "privacy.set", "portfolio.unlock", "layout.save",
-                "clock.ping", "sync.request", "stepup.verify"
+                "clock.ping", "sync.request", "stepup.verify", "activity.ping"
               ]
             }
           }
@@ -86,7 +86,8 @@
         { "if": { "properties": { "type": { "const": "layout.save" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/LayoutSave" } } } },
         { "if": { "properties": { "type": { "const": "clock.ping" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/ClockPing" } } } },
         { "if": { "properties": { "type": { "const": "sync.request" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/SyncRequest" } } } },
-        { "if": { "properties": { "type": { "const": "stepup.verify" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/StepupVerify" } } } }
+        { "if": { "properties": { "type": { "const": "stepup.verify" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/StepupVerify" } } } },
+        { "if": { "properties": { "type": { "const": "activity.ping" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/Empty" } } } }
       ]
     },
 
@@ -673,7 +674,7 @@
         "on": { "type": "boolean" },
         "reason": { "enum": ["user", "inactivity"] }
       },
-      "description": "Per device. While on, the server redacts personal/secret data for this device and stops sending transcript.* and assistant.delta. On every change the server follows with a fresh sync.snapshot."
+      "description": "Per device. While on, the server redacts personal/secret data for this device and stops sending transcript.* and assistant.delta. On every change the server follows with a fresh sync.snapshot. reason=inactivity: the device sent no interaction for its inactivity window; every client frame except clock.ping and sync.request counts as interaction, including activity.ping."
     },
 
     "ClockPong": {

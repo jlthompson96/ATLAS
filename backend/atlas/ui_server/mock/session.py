@@ -131,6 +131,7 @@ class Session:
         self._tokens: dict[str, int] = {}  # step-up token -> expires_at
         self._failures = {"pin": 0, "passphrase": 0}
         self._client_seq = -1
+        self.last_activity_ms: int | None = None
         self._busy = False  # an interactive reply is driving the orb
         self._resting: Json = {"state": "idle"}
         self._scenario_playing = False
@@ -238,6 +239,11 @@ class Session:
 
     async def _on_clock_ping(self, seq: int, p: Json) -> None:
         await self.emit("clock.pong", {"client_t": p["client_t"], "server_t": self.clock.now()})
+
+    async def _on_activity_ping(self, seq: int, p: Json) -> None:
+        # Resets the device's privacy-inactivity timer; no reply (contracts/README.md, "Inactivity").
+        # The mock has no inactivity timer, so it only records the time.
+        self.last_activity_ms = self.clock.now()
 
     async def _on_sync_request(self, seq: int, p: Json) -> None:
         await self.snapshot()

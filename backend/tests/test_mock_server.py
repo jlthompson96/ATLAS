@@ -186,6 +186,17 @@ def test_text_input_and_ptt_drive_legal_state_sequences() -> None:
     run(go())
 
 
+def test_activity_ping_is_accepted_silently() -> None:
+    async def go() -> None:
+        h = Harness()
+        await h.session.snapshot()
+        assert await h.send("activity.ping", {}) == []
+        assert h.session.last_activity_ms == VALIDATION_T0
+        assert h.result(await h.send("activity.ping", {"x": 1}))["code"] == "INVALID_MESSAGE"
+
+    run(go())
+
+
 def test_invalid_client_frame_is_rejected() -> None:
     async def go() -> None:
         h = Harness()

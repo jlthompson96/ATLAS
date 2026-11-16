@@ -1,6 +1,6 @@
 # ATLAS services, v1
 
-**Schema revision:** 1.0.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
+**Schema revision:** 1.1.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
 
 This file is the single source for service names, Unix users, listeners, secrets and egress allowlists. nftables rules, systemd units, the egress proxy config and the audit `actor` enum are all generated from or checked against it.
 
@@ -65,7 +65,17 @@ Each Pi service runs as its own system user, named the same as the service (`atl
 
 Each service gets `HTTPS_PROXY=http://127.0.0.1:<its port>` in its unit, and nftables drops loopback connections to that port from any other `skuid`.
 
-Unix sockets live in `/run/atlas/` (tmpfs), created by systemd socket units with mode `0660` and group `atlas-<consumer>` so only the named clients can connect.
+Unix sockets live in `/run/atlas/` (tmpfs), created by systemd socket units with mode `0660`, so only members of the socket's group can connect. Clients get membership per unit with `SupplementaryGroups=`, never with `usermod`.
+
+| Socket | Group | Members |
+|---|---|---|
+| `core.sock` | `atlas-core-clients` | the `atlas-core` clients listed above |
+| `audit.sock` | `atlas-audit-clients` | every Pi service that writes audit records |
+| `executor.sock` | `atlas-core` | `atlas-core` only |
+| `fallback.sock` | `atlas-core` | `atlas-core` only |
+| `egress-research.sock` | `atlas-research` | `atlas-research` only |
+
+A group named `atlas-<consumer>` is used only for a socket with exactly one client, and then contains only that user. Sockets with several clients get an `atlas-<service>-clients` group.
 
 ## 3. Internet egress allowlist (per caller)
 
@@ -126,12 +136,24 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes    # relaxed for services that load ONNX/llama.cpp JITs, if measured necessary
 SystemCallFilter=@system-service
 SystemCallArchitectures=native
-IPAddressDeny=any             # atlas-egress: IPAddressAllow=any; atlas-ui: LAN + loopback
-RestrictAddressFamilies=AF_UNIX   # atlas-egress, atlas-ui add AF_INET AF_INET6
+IPAddressDeny=any             # atlas-egress: IPAddressAllow=any; atlas-ui: LAN + loopback; see "Address-family relaxations"
+RestrictAddressFamilies=AF_UNIX   # see "Address-family relaxations"
 StateDirectory=atlas/<name>   # on the data partition, /var/lib/atlas/<name>
 ```
 
 `atlas-research` adds `PrivateNetwork=yes`. `atlas-voice` and `atlas-fallback` set `MemoryMax=` from the §3.1 budgets.
+
+**Address-family relaxations** (the only services that may have IP address families; tests pin this list):
+
+| Service | Adds | `IPAddressAllow=` |
+|---|---|---|
+| `atlas-egress` | `AF_INET AF_INET6` | `any` |
+| `atlas-ui` | `AF_INET AF_INET6` | LAN + loopback |
+| `atlas-google`, `atlas-discord`, `atlas-executor`, `atlas-panels`, `atlas-market`, `atlas-search` | `AF_INET` | `localhost` (their `HTTPS_PROXY` port only; nftables enforces the port) |
+| `atlas-core` | `AF_INET` | `localhost`, `10.77.0.2` (LM Studio, `atlas-hostd`), the LAN broadcast address (Wake-on-LAN) |
+| `atlas-kiosk` | `AF_INET` | `localhost` (`https://127.0.0.1`) |
+
+**Capabilities:** `atlas-audit` gets `CAP_LINUX_IMMUTABLE` (`chattr +a` on the active segment, `+i` when sealed); `atlas-ui` gets `CAP_NET_BIND_SERVICE`. No other service gets a capability.
 
 ## 6. Code location and releases (§7.0, Development environment)
 
@@ -139,5 +161,10 @@ StateDirectory=atlas/<name>   # on the data partition, /var/lib/atlas/<name>
 - Releases are owned by `root`, mode `0755`/`0644`, and are read-only to every service (`ProtectSystem=strict` already enforces this; only each service's `StateDirectory` is writable).
 - Unit files start code through the symlink (`ExecStart=/var/lib/atlas/current/...`), never through a versioned path.
 - A deploy copies a new release over SSH from the admin device, then switches the symlink and restarts units. Rollback switches the symlink back. Keep the last 3 releases.
-- `releases` and `current` are reserved names under `/var/lib/atlas/`; no service may be named after them.
+- Reserved names under `/var/lib/atlas/`; no service may be named after them:
+  - `releases`: the versioned releases;
+  - `current`: symlink to the active release;
+  - `previous`: symlink to the release `current` last replaced, for rollback;
+  - `incoming`: upload staging for deploys, owned by the admin account;
+  - `credentials`: `LoadCredentialEncrypted=` files, root-only, `credentials/<service>/<name>.cred`.
 - Each service's runtime dependencies are installed into its release from a lock resolved for Linux `aarch64`, Python 3.13, with `--require-hashes`.
