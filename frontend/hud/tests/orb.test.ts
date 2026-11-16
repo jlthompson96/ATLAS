@@ -235,6 +235,18 @@ describe('Orb component, static tier: a snapshot per state (§8 Phase 2: snapsho
     expect(h.store.announcement).toBe('PROCESSING');
   });
 
+  it('announces a wake once per stage, not once per second', async () => {
+    h = mountHud(Orb);
+    await settle();
+    const heard: string[] = [];
+    const store = h.store;
+    for (const [stage, elapsed] of [['packet', 0], ['packet', 1000], ['packet', 2000], ['link', 4000], ['link', 5000], ['api', 9000]] as const) {
+      store.apply(frame('state.changed', { state: 'waking_host', wake: { stage, elapsed_ms: elapsed, deadline_ms: 60_000 } }));
+      if (heard.at(-1) !== store.announcement) heard.push(store.announcement);
+    }
+    expect(heard).toEqual(['Waking core: sending wake packet', 'Waking core: waiting for link', 'Waking core: waiting for API']);
+  });
+
   it('forces the static tier under prefers-reduced-motion and shows a level bar instead of animation', async () => {
     h = mountHud(Orb, { snapshot: snapshot({ state: { state: 'listening' } }) });
     h.settings.set({ quality: 'full' });
