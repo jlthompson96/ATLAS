@@ -460,6 +460,17 @@ def test_f2_pruned_variables_take_their_fingerprints_with_them() -> None:
     assert not store.index.contains("a long enough body to have several") and store.index.counts == {}
 
 
+def test_f2_each_request_prunes_items_that_left_the_index() -> None:
+    h = Harness(backend=ScriptedBackend(responder=_list_inbox))
+    h.add_item("a body long enough to be fingerprinted by the index", rid="gmail:msg/gone")
+    run(h.run("what's new?"))
+    assert h.runtime.store.lookup("$EMAIL_1") is not None
+    h.runtime.index.remove("gmail:msg/gone")
+    run(h.run("what's new?"))
+    assert h.runtime.store.lookup("$EMAIL_1") is None
+    assert not h.runtime.store.index.contains("a body long enough to be fingerprinted")
+
+
 def test_f2_variables_expire_and_the_store_evicts_instead_of_failing() -> None:
     now = [0]
     store = VariableStore(lambda: now[0], ttl_ms=1000)
