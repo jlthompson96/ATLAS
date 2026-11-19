@@ -182,7 +182,7 @@ def draft_payload(args: Mapping[str, Any], store: VariableStore, channel_labels:
 
 def clean_summary(text: str) -> str:
     """The approval card's one-liner: the planner's own words, single line, no control characters."""
-    kept = "".join(ch for ch in text if unicodedata.category(ch)[0] != "C")
+    kept = "".join(" " if ch in "\r\n\t" else ch for ch in text if ch in "\r\n\t" or unicodedata.category(ch)[0] != "C")
     return " ".join(kept.split())[:200] or "Proposed action"
 
 
