@@ -45,6 +45,7 @@ from atlas.policy.payloads import EXECUTOR_KINDS, parse_canonical, validate_payl
 MAX_ENVELOPE_BYTES: Final = 192 * 1024
 CLOCK_SKEW_MS: Final = 5_000
 ENVELOPE_KEYS: Final = frozenset({"op", "approval", "signature", "payload_canonical"})
+SUPPORTED_KINDS: Final = frozenset(kind.value for kind in EXECUTOR_KINDS)
 
 
 class Rejected(Exception):
@@ -98,7 +99,7 @@ class ApprovalVerifier:
         nonces: NonceStore,
         clock_ms: Callable[[], int],
         *,
-        supported_kinds: frozenset[str] = frozenset(k.value for k in EXECUTOR_KINDS),
+        supported_kinds: frozenset[str] = SUPPORTED_KINDS,
     ) -> None:
         self._key = public_key
         self._key_id = key_id_for(public_key)

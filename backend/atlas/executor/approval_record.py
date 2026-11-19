@@ -130,10 +130,12 @@ class ApprovalRecord:
         checks: dict[str, bool] = {
             "v": data["v"] == VERSION and type(data["v"]) is int,
             "type": data["type"] == RECORD_TYPE,
-            "approval_id": isinstance(data["approval_id"], str) and _APPROVAL_ID.fullmatch(data["approval_id"]) is not None,
+            "approval_id": isinstance(data["approval_id"], str)
+            and _APPROVAL_ID.fullmatch(data["approval_id"]) is not None,
             "action_id": isinstance(data["action_id"], str) and _ID.fullmatch(data["action_id"]) is not None,
             "action_kind": data["action_kind"] in _KINDS,
-            "payload_sha256": isinstance(data["payload_sha256"], str) and _SHA.fullmatch(data["payload_sha256"]) is not None,
+            "payload_sha256": isinstance(data["payload_sha256"], str)
+            and _SHA.fullmatch(data["payload_sha256"]) is not None,
             "origin_context": data["origin_context"] in ("interactive", "unattended"),
             "decision_context": isinstance(data["decision_context"], str),
             "approved_via": isinstance(data["approved_via"], str),
