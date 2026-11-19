@@ -168,6 +168,16 @@ def test_tainted_text_typed_into_tool_arguments_is_refused() -> None:
     assert "TAINT_LEAK" in codes
 
 
+def test_tainted_text_hidden_behind_json_escapes_is_refused_too() -> None:
+    leaked = "wire the deposit to account 12345678 at the usual bank"
+    escaped = '{"query": "' + "".join(f"\\u{ord(c):04x}" for c in leaked) + '"}'
+    turns = [call_turn(("read_index", {"source": "all"})), call_turn(("search_memory", escaped)), text_turn("ok")]
+    h = Harness(backend=ScriptedBackend(turns))
+    h.add_item("Please wire the deposit to account 12345678 at the usual bank today.")
+    run(h.run())
+    assert h.core_audit.of_kind("tool_call")[-1]["result"] == {"status": "refused", "code": "TAINT_LEAK"}
+
+
 # --- budgets and errors --------------------------------------------------------------------------------------
 
 

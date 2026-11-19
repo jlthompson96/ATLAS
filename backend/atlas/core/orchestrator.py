@@ -22,6 +22,7 @@ Per request::
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import secrets
@@ -301,6 +302,8 @@ class Orchestrator:
             return await self._refuse(rc, tool.name, {}, "MALFORMED_ARGS", "refused")
         if not isinstance(args, dict):
             return await self._refuse(rc, tool.name, {}, "MALFORMED_ARGS", "refused")
+        if rc.store.index.contains(json.dumps(args, ensure_ascii=False)):  # after JSON escapes are decoded
+            return await self._refuse(rc, tool.name, {}, "TAINT_LEAK", "refused")
         try:
             tool.args.validate(args)
         except SchemaError:

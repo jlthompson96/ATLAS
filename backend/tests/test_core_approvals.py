@@ -111,6 +111,7 @@ def test_ap1_hash_mismatch_is_refused() -> None:
     h, event = harness_with_proposal()
     h.stepups.register("hud-remote", MOCK_PIN_TOKEN, h.clock.wall() + 60_000)
     assert decide(h, event, payload_sha256="0" * 64).code == "HASH_MISMATCH"
+    assert decide(h, event, payload_sha256="\u00e9" * 64).code == "HASH_MISMATCH"  # never raises
     h.assert_no_unapproved_action()
 
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Final, Literal, Protocol
@@ -45,6 +46,7 @@ from atlas.policy.types import ActionKind, ActionState, Context, DecisionChannel
 STEP_UP_TTL_MS: Final = 60_000  # events.v1 StepupGranted: 60 s after the PIN was verified
 APPROVAL_TTL_MS: Final = 5 * 60 * 1000  # how long the executor may act on a signed approval
 MAX_STEP_UP_TOKENS: Final = 64
+_SHA_RE: Final = re.compile(r"[0-9a-f]{64}")
 
 
 def _token_digest(token: str) -> bytes:
@@ -170,7 +172,9 @@ class ApprovalService:
                 device_can_approve=device is not None and device.can_approve,
                 step_up_valid=self._stepups.valid(device_id, step_up_token),
                 action_state=None if action is None else action.state,
-                hash_matches=action is not None and hmac.compare_digest(action.payload_sha256, payload_sha256),
+                hash_matches=action is not None
+                and _SHA_RE.fullmatch(payload_sha256) is not None
+                and hmac.compare_digest(action.payload_sha256, payload_sha256),
                 now_ms=now,
                 expires_at_ms=0 if action is None else action.expires_at_ms,
             )
