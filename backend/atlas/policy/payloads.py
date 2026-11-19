@@ -86,7 +86,9 @@ def _email_errors(p: dict[str, Any]) -> list[str]:
         errors.append("subject: invalid")
     if not _text(p["body"], MAX_EMAIL_BODY, min_len=1):
         errors.append("body: invalid")
-    if "in_reply_to" in p and (not isinstance(p["in_reply_to"], str) or not RESOURCE_REF_RE.fullmatch(p["in_reply_to"])):
+    if "in_reply_to" in p and (
+        not isinstance(p["in_reply_to"], str) or not RESOURCE_REF_RE.fullmatch(p["in_reply_to"])
+    ):
         errors.append("in_reply_to: invalid")
     return errors
 
@@ -165,4 +167,3 @@ def recipients(payload: dict[str, Any]) -> list[str]:
     if payload.get("kind") == ActionKind.EMAIL_SEND.value:
         return [str(a) for a in [*payload.get("to", []), *payload.get("cc", [])]]
     return []
-

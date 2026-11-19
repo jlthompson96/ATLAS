@@ -95,7 +95,9 @@ class DeviceDirectory:
         self._devices = dict(devices or {})
 
     def add(self, device_id: str, role: Literal["kiosk", "remote"], *, can_approve: bool | None = None) -> None:
-        self._devices[device_id] = DevicePolicy(device_id, role, role == "remote" if can_approve is None else can_approve)
+        self._devices[device_id] = DevicePolicy(
+            device_id, role, role == "remote" if can_approve is None else can_approve
+        )
 
     def get(self, device_id: str) -> DevicePolicy | None:
         return self._devices.get(device_id)
@@ -254,7 +256,9 @@ class ApprovalService:
         now = self._clock()
         if reply.get("ok") is True:
             self._pending.set_state(action, ActionState.EXECUTED, now)
-            await self._events.emit("action.resolved", {"action_id": action.action_id, "outcome": "executed", "at": now})
+            await self._events.emit(
+                "action.resolved", {"action_id": action.action_id, "outcome": "executed", "at": now}
+            )
         else:
             self._pending.set_state(action, ActionState.FAILED, now)
             code = "SEND_FAILED" if reply.get("code") == "SEND_FAILED" else "EXECUTOR_REJECTED"

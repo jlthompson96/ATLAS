@@ -68,7 +68,12 @@ PROPOSE_ARGS: Final = Obj(
         "to": Array(RefOr(_EMAIL_TEXT), max_items=10, description="email.send: addresses or $VAR names."),
         "cc": Array(RefOr(_EMAIL_TEXT), max_items=10),
         "subject": RefOr(PlainText(200, single_line=True)),
-        "body": Array(RefOr(PlainText(4000)), max_items=MAX_PARTS, min_items=1, description="Text parts and/or $VAR names, joined in order."),
+        "body": Array(
+            RefOr(PlainText(4000)),
+            max_items=MAX_PARTS,
+            min_items=1,
+            description="Text parts and/or $VAR names, joined in order.",
+        ),
         "in_reply_to": Ref(description="email.send: the $EMAIL_n item being answered."),
         "channel_id": PlainText(20, pattern="[0-9]{17,20}", description="discord.post: an allowlisted channel ID."),
         "content": _PARTS,

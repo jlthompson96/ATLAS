@@ -55,9 +55,7 @@ class Sanitized:
 
 # --- Unicode ---------------------------------------------------------------------------------------
 
-_ZERO_WIDTH: Final = frozenset(
-    "​‌‍⁠⁡⁢⁣⁤﻿᠎­͏ᅟᅠㅤﾠ឴឵"
-)
+_ZERO_WIDTH: Final = frozenset("​‌‍⁠⁡⁢⁣⁤﻿᠎­͏ᅟᅠㅤﾠ឴឵")
 _BIDI: Final = frozenset("‪‫‬‭‮⁦⁧⁨⁩‎‏؜")
 
 
@@ -99,13 +97,59 @@ def strip_invisible(text: str) -> tuple[str, frozenset[ContentFlag], int]:
 # --- HTML ------------------------------------------------------------------------------------------
 
 _SKIP_TAGS: Final = frozenset(
-    {"script", "style", "head", "title", "template", "noscript", "iframe", "object", "embed", "svg", "math", "meta", "link", "base", "select", "option", "textarea", "button", "canvas", "audio", "video"}
+    {
+        "script",
+        "style",
+        "head",
+        "title",
+        "template",
+        "noscript",
+        "iframe",
+        "object",
+        "embed",
+        "svg",
+        "math",
+        "meta",
+        "link",
+        "base",
+        "select",
+        "option",
+        "textarea",
+        "button",
+        "canvas",
+        "audio",
+        "video",
+    }
 )
 _VOID_TAGS: Final = frozenset(
     {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 )
 _BLOCK_TAGS: Final = frozenset(
-    {"p", "div", "br", "li", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "table", "ul", "ol", "section", "article", "blockquote", "pre", "hr", "header", "footer"}
+    {
+        "p",
+        "div",
+        "br",
+        "li",
+        "tr",
+        "td",
+        "th",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "table",
+        "ul",
+        "ol",
+        "section",
+        "article",
+        "blockquote",
+        "pre",
+        "hr",
+        "header",
+        "footer",
+    }
 )
 _WHITE: Final = r"(?:white|#fff(?:fff)?\b|rgba?\(\s*255\s*,\s*255\s*,\s*255\s*(?:,\s*[\d.]+\s*)?\)|transparent|hsla?\(\s*\d+\s*,\s*\d+%\s*,\s*100%)"
 _HIDING_CSS: Final = re.compile(

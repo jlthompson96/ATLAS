@@ -169,7 +169,12 @@ class MemoryStore:
 
     def purge_expired(self) -> int:
         now = self._clock()
-        ids = [r[0] for r in self._db.execute("SELECT id FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?", (now,))]
+        ids = [
+            r[0]
+            for r in self._db.execute(
+                "SELECT id FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?", (now,)
+            )
+        ]
         for row_id in ids:
             self.forget(int(row_id))
         return len(ids)

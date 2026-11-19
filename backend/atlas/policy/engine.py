@@ -220,7 +220,9 @@ def decide_approval(inp: ApprovalInput) -> ApprovalVerdict:
     keeps the kiosk and voice paths unable to change pending state at all.
     """
     if inp.channel is not DecisionChannel.HUD:
-        return ApprovalVerdict(False, "FORBIDDEN_DEVICE", "VOICE_CANNOT_APPROVE" if inp.channel is DecisionChannel.VOICE else "NOT_HUD")
+        return ApprovalVerdict(
+            False, "FORBIDDEN_DEVICE", "VOICE_CANNOT_APPROVE" if inp.channel is DecisionChannel.VOICE else "NOT_HUD"
+        )
     if inp.decision not in ("approve", "deny"):
         return ApprovalVerdict(False, "INVALID_MESSAGE", "BAD_DECISION")
     if not inp.device_known:

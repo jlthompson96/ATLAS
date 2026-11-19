@@ -163,7 +163,11 @@ class QuarantinedReader:
         size = 0
         try:
             async for delta in self._backend.chat(
-                prompt.messages, max_tokens=self._max_tokens, tools=None, response_schema=schema.json_schema(), deadline=deadline
+                prompt.messages,
+                max_tokens=self._max_tokens,
+                tools=None,
+                response_schema=schema.json_schema(),
+                deadline=deadline,
             ):
                 if delta.tool_calls:
                     raise ReaderRefused("READER_TOOL_CALL")
