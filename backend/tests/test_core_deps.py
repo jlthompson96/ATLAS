@@ -12,7 +12,9 @@ BACKEND = REPO / "backend"
 
 
 def _pins(name: str) -> list[str]:
-    return [line for line in (BACKEND / f"requirements-{name}.lock").read_text().splitlines() if not line.startswith("#")]
+    return [
+        line for line in (BACKEND / f"requirements-{name}.lock").read_text().splitlines() if not line.startswith("#")
+    ]
 
 
 @pytest.mark.parametrize("name", ["core", "executor"])
