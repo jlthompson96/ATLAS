@@ -67,6 +67,7 @@ A concurrent decision on an action that another decision is already recording al
 So **atlas-ui alone can approve**. atlas-ui is the most exposed Pi service: it parses LAN traffic and serves browsers. That makes it the weakest link in the approval chain.
 
 **Proposal:**
+
 - Move `stepup-pin-hash` to atlas-core's credentials (services.md §4).
 - Core verifies the PIN, and keeps the rate limit and audit record for failures.
 - atlas-ui forwards `stepup.verify {pin}` over `core.sock` (the peer is checked) and relays the `stepup.granted` token core returns.
@@ -85,6 +86,7 @@ Until this lands, a compromised atlas-ui could approve any pending action. Every
 If core's signing key were stolen, or core itself compromised, the executor would post to any channel and send at any rate. That is a privilege the executor holds alone, so its own guardrails belong in the executor too.
 
 **Proposal:**
+
 - The executor's configuration (next to the approval public key) carries the Discord channel allowlist.
 - Optionally, a recipient-domain policy.
 - A per-kind send rate limit (for example, 20 emails an hour, 20 posts an hour).
