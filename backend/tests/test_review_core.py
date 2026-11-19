@@ -15,11 +15,16 @@ from typing import Any
 
 import pytest
 
+from atlas.audit.client import AppendReply
 from atlas.core import reader as reader_module
-from atlas.core.fake_llm import ScriptedBackend, text_turn
+from atlas.core.auditing import RecordingAuditSink
+from atlas.core.fake_llm import ScriptedBackend, call_turn, text_turn
 from atlas.core.reader import QuarantinedReader, ReaderRefused, ReaderTask
 from atlas.core.sanitize import MAX_HTML_BYTES, ContentFlag, sanitize
 from atlas.core.taint import Source, SourceKind, UntrustedContent, VariableStore
+from atlas.llm.interface import Message, Role, ToolSpec
+from atlas.policy.types import ActionState, DecisionChannel
+from tests.core_support import MOCK_PIN_TOKEN, Harness
 
 
 def run[T](coro: Coroutine[Any, Any, T]) -> T:
@@ -177,3 +182,111 @@ def test_f10_ordinary_styles_stay_visible(style: str) -> None:
     clean = sanitize(f"<p>visible</p><span style='{style}'>SHOWN</span>".encode(), "text/html")
     assert "SHOWN" in clean.text, style
     assert ContentFlag.HIDDEN_HTML not in clean.flags
+
+
+# --- F5: concurrent decisions on one action (exp3, exp3b) ------------------------------------------------------
+
+PROPOSE_DANA = (
+    "propose_action",
+    {"kind": "email.send", "summary": "Hi Dana", "to": ["dana@example.org"], "subject": "Hi", "body": ["See you"]},
+)
+
+
+def _proposer(messages: list[Message], tools: list[ToolSpec] | None, schema: Any) -> Any:
+    return text_turn("Proposed.") if messages[-1].role is Role.TOOL else call_turn(PROPOSE_DANA)
+
+
+class SlowAudit:
+    """Yields to the event loop on every append, as a real socket round trip does."""
+
+    def __init__(self, inner: RecordingAuditSink) -> None:
+        self.inner = inner
+
+    async def append(self, record: dict[str, Any]) -> AppendReply:
+        await asyncio.sleep(0)
+        return await self.inner.append(record)
+
+
+def _race_harness() -> tuple[Harness, str, dict[str, Any]]:
+    h = Harness(backend=ScriptedBackend(responder=_proposer))
+    out = run(h.run("email dana"))
+    action_id = out.pending_actions[0]
+    h.approvals._audit = SlowAudit(h.core_audit)  # type: ignore[assignment]
+    h.stepups.register("hud-remote", MOCK_PIN_TOKEN, h.clock.wall() + 60_000)
+    sha = h.runtime.pending.get(action_id).payload_sha256  # type: ignore[union-attr]
+    kw = {
+        "channel": DecisionChannel.HUD,
+        "device_id": "hud-remote",
+        "action_id": action_id,
+        "payload_sha256": sha,
+        "step_up_token": MOCK_PIN_TOKEN,
+    }
+    return h, action_id, kw
+
+
+@pytest.mark.parametrize("order", [("approve", "deny"), ("deny", "approve"), ("approve", "approve")])
+def test_f5_exactly_one_concurrent_decision_wins(order: tuple[str, str]) -> None:
+    h, action_id, kw = _race_harness()
+
+    async def both() -> list[Any]:
+        return list(await asyncio.gather(*(h.approvals.decide(decision=d, **kw) for d in order)))
+
+    first, second = run(both())
+    assert (first.ok, second.ok) == (True, False)
+    assert second.code == "BUSY" and second.signed is None
+    action = h.runtime.pending.get(action_id)
+    assert action is not None
+    winner = order[0]
+    assert action.state is (ActionState.APPROVED if winner == "approve" else ActionState.DENIED)
+    # Audit trail and events agree: one decision recorded, one resolution emitted.
+    assert [r["action"]["decision"] for r in h.core_audit.of_kind("approval")] == [winner]
+    resolved = [e["outcome"] for e in h.events.of_type("action.resolved")]
+    assert resolved == ["approved" if winner == "approve" else "denied"]
+    # At most one send, and none at all when the deny won.
+    if first.signed is not None:
+        assert run(h.approvals.execute(first.signed, h.link))["ok"] is True
+    assert len(h.email.sent) == (1 if winner == "approve" else 0)
+
+
+def test_f5_a_failed_audit_returns_the_action_to_pending() -> None:
+    h, action_id, kw = _race_harness()
+    h.approvals._audit = RecordingAuditSink("atlas-core", fail_with="AUDIT_UNAVAILABLE")
+    assert run(h.approvals.decide(decision="approve", **kw)).code == "BUSY"
+    assert h.runtime.pending.get(action_id).state is ActionState.PENDING  # type: ignore[union-attr]
+
+
+# --- single-use step-up (owner decision) ------------------------------------------------------------------------
+
+
+def test_step_up_token_is_spent_by_a_successful_decision() -> None:
+    h = Harness(backend=ScriptedBackend(responder=_proposer))
+    first = run(h.run("email dana")).pending_actions[0]
+    second = run(h.run("email dana again")).pending_actions[0]
+    h.stepups.register("hud-remote", MOCK_PIN_TOKEN, h.clock.wall() + 60_000)
+    sha = {a: h.runtime.pending.get(a).payload_sha256 for a in (first, second)}  # type: ignore[union-attr]
+    kw = {"channel": DecisionChannel.HUD, "device_id": "hud-remote", "step_up_token": MOCK_PIN_TOKEN}
+    # A refused attempt does not spend the token...
+    assert (
+        run(h.approvals.decide(action_id=first, decision="approve", payload_sha256="0" * 64, **kw)).code
+        == "HASH_MISMATCH"
+    )
+    assert run(h.approvals.decide(action_id=first, decision="approve", payload_sha256=sha[first], **kw)).ok
+    # ...but a successful one does: the same PIN entry cannot approve a second action within its 60 s.
+    result = run(h.approvals.decide(action_id=second, decision="approve", payload_sha256=sha[second], **kw))
+    assert result.code == "STEP_UP_REQUIRED"
+
+
+def test_step_up_token_can_be_bound_to_the_action_on_screen() -> None:
+    h = Harness(backend=ScriptedBackend(responder=_proposer))
+    first = run(h.run("email dana")).pending_actions[0]
+    second = run(h.run("email dana again")).pending_actions[0]
+    h.stepups.register("hud-remote", MOCK_PIN_TOKEN, h.clock.wall() + 60_000, action_id=first)
+    sha = {a: h.runtime.pending.get(a).payload_sha256 for a in (first, second)}  # type: ignore[union-attr]
+    kw = {
+        "channel": DecisionChannel.HUD,
+        "device_id": "hud-remote",
+        "step_up_token": MOCK_PIN_TOKEN,
+        "decision": "approve",
+    }
+    assert run(h.approvals.decide(action_id=second, payload_sha256=sha[second], **kw)).code == "STEP_UP_REQUIRED"
+    assert run(h.approvals.decide(action_id=first, payload_sha256=sha[first], **kw)).ok

@@ -51,6 +51,7 @@ class ProposalWarning(StrEnum):
 
 class ActionState(StrEnum):
     PENDING = "pending"
+    DECIDING = "deciding"  # a decision passed every check and is being recorded; others are refused (review F5)
     APPROVED = "approved"
     DENIED = "denied"
     EXPIRED = "expired"

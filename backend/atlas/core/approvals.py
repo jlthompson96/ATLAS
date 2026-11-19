@@ -54,32 +54,50 @@ def _token_digest(token: str) -> bytes:
 
 
 class StepUpRegistry:
-    """Step-up tokens granted by atlas-ui, bound to one device, stored as hashes only."""
+    """Step-up tokens granted by atlas-ui: bound to one device, optionally to one action, single use.
+
+    Stored as hashes only. A token is consumed by the first decision that passes every check
+    (owner decision after the review: stricter than events.v1's "valid 60 s", no contract change).
+    If atlas-ui knows which pending action was on screen when the PIN was entered, it passes
+    ``action_id`` and the token is good for that action only.
+    """
 
     def __init__(self, clock_ms: Callable[[], int]) -> None:
         self._clock = clock_ms
-        self._tokens: dict[bytes, tuple[str, int]] = {}  # digest -> (device_id, expires_at)
+        self._tokens: dict[bytes, tuple[str, int, str | None]] = {}  # digest -> (device_id, expires_at, action_id)
 
-    def register(self, device_id: str, token: str, expires_at_ms: int) -> None:
+    def register(self, device_id: str, token: str, expires_at_ms: int, *, action_id: str | None = None) -> None:
         now = self._clock()
         if expires_at_ms > now + STEP_UP_TTL_MS:
             raise ValueError("step-up tokens live at most 60 s")
         self._prune(now)
         if len(self._tokens) >= MAX_STEP_UP_TOKENS:
             raise OverflowError("too many live step-up tokens")
-        self._tokens[_token_digest(token)] = (device_id, expires_at_ms)
+        self._tokens[_token_digest(token)] = (device_id, expires_at_ms, action_id)
 
-    def valid(self, device_id: str, token: str) -> bool:
+    def _find(self, token: str) -> bytes | None:
+        digest = _token_digest(token)
+        for known in self._tokens:
+            if hmac.compare_digest(known, digest):
+                return known
+        return None
+
+    def valid(self, device_id: str, token: str, action_id: str | None = None) -> bool:
         now = self._clock()
         self._prune(now)
-        digest = _token_digest(token)
-        for known, (owner, expires) in self._tokens.items():
-            if hmac.compare_digest(known, digest):
-                return owner == device_id and now < expires
-        return False
+        known = self._find(token)
+        if known is None:
+            return False
+        owner, expires, bound = self._tokens[known]
+        return owner == device_id and now < expires and (bound is None or bound == action_id)
+
+    def consume(self, token: str) -> None:
+        known = self._find(token)
+        if known is not None:
+            del self._tokens[known]
 
     def _prune(self, now: int) -> None:
-        for digest in [d for d, (_, exp) in self._tokens.items() if exp <= now]:
+        for digest in [d for d, (_, exp, _) in self._tokens.items() if exp <= now]:
             del self._tokens[digest]
 
 
@@ -170,7 +188,7 @@ class ApprovalService:
                 decision=decision,
                 device_known=device is not None,
                 device_can_approve=device is not None and device.can_approve,
-                step_up_valid=self._stepups.valid(device_id, step_up_token),
+                step_up_valid=self._stepups.valid(device_id, step_up_token, action_id),
                 action_state=None if action is None else action.state,
                 hash_matches=action is not None
                 and _SHA_RE.fullmatch(payload_sha256) is not None
@@ -185,9 +203,21 @@ class ApprovalService:
                 await self._events.emit("action.resolved", {"action_id": action_id, "outcome": "expired", "at": now})
             return DecideResult(False, verdict.code)
         assert action is not None  # noqa: S101 - decide_approval refuses unknown actions
-        if decision == "deny":
-            return await self._deny(action, device_id, now)
-        return await self._approve(action, device_id, now)
+        # Claim the action and spend the step-up token *before* the first await (review F5): a second
+        # decision arriving while this one is being audited sees DECIDING and is refused with BUSY.
+        self._pending.set_state(action, ActionState.DECIDING, now)
+        self._stepups.consume(step_up_token)
+        try:
+            if decision == "deny":
+                result = await self._deny(action, device_id, now)
+            else:
+                result = await self._approve(action, device_id, now)
+        except BaseException:
+            self._pending.set_state(action, ActionState.PENDING, now)
+            raise
+        if not result.ok:
+            self._pending.set_state(action, ActionState.PENDING, now)  # nothing recorded; the user may retry
+        return result
 
     async def _deny(self, action: PendingAction, device_id: str, now: int) -> DecideResult:
         try:

@@ -229,6 +229,8 @@ def decide_approval(inp: ApprovalInput) -> ApprovalVerdict:
         return ApprovalVerdict(False, "FORBIDDEN_DEVICE", "UNKNOWN_DEVICE")
     if not inp.device_can_approve:
         return ApprovalVerdict(False, "FORBIDDEN_DEVICE", "DEVICE_CANNOT_APPROVE")
+    if inp.action_state is ActionState.DECIDING:
+        return ApprovalVerdict(False, "BUSY", "DECISION_IN_PROGRESS")
     if inp.action_state is None or inp.action_state is not ActionState.PENDING:
         # Unknown, already decided (replay), expired or executed: nothing pending to decide on.
         return ApprovalVerdict(False, "UNKNOWN_ACTION", "NOT_PENDING" if inp.action_state else "UNKNOWN_ACTION")

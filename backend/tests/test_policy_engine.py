@@ -163,6 +163,7 @@ OK = ApprovalInput(
         ({"device_known": False}, "FORBIDDEN_DEVICE", "UNKNOWN_DEVICE"),
         ({"device_can_approve": False}, "FORBIDDEN_DEVICE", "DEVICE_CANNOT_APPROVE"),
         ({"action_state": None}, "UNKNOWN_ACTION", "UNKNOWN_ACTION"),
+        ({"action_state": ActionState.DECIDING}, "BUSY", "DECISION_IN_PROGRESS"),
         ({"action_state": ActionState.APPROVED}, "UNKNOWN_ACTION", "NOT_PENDING"),
         ({"action_state": ActionState.DENIED}, "UNKNOWN_ACTION", "NOT_PENDING"),
         ({"now_ms": 2000}, "EXPIRED", "EXPIRED"),
