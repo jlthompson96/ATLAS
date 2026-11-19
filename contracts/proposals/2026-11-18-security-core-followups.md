@@ -1,4 +1,4 @@
-# Proposal: security-core follow-ups (action payload shapes, actor pinning, step-up registration, approval record)
+# Proposal: security-core follow-ups (payload shapes, actor pinning, step-up, approval record, PIN in core, executor guardrails, research.run)
 
 **Targets:** `events.v1.schema.json` (1.1.0), `audit-record.v1.schema.json` (1.1.0), `services.md` (1.1.0).
 **Author:** security-core agent.
@@ -57,3 +57,46 @@ It should move into `contracts/` only if a second implementation ever produces o
 If the durable `approval` audit record can't be written, core refuses the decision. It reports `BUSY` today, the closest catalogue code.
 
 **Proposal:** add `AUDIT_UNAVAILABLE` to the `request.result` catalogue so the HUD can say why.
+
+A concurrent decision on an action that another decision is already recording also gets `BUSY` (review F5). That use fits the catalogue as it is.
+
+## 6. PIN verification moves into atlas-core (services.md and events.v1; review F3, from the 2026-11-18 security review)
+
+**The gap.** atlas-ui verifies the PIN (`stepup-pin-hash` is its credential) and tells core which step-up tokens it granted. Core enforces everything else: device, channel, single use, hash and expiry. But core can't tell a token granted after a real PIN entry from one a compromised atlas-ui simply registered.
+
+So **atlas-ui alone can approve**. atlas-ui is the most exposed Pi service: it parses LAN traffic and serves browsers. That makes it the weakest link in the approval chain.
+
+**Proposal:**
+- Move `stepup-pin-hash` to atlas-core's credentials (services.md §4).
+- Core verifies the PIN, and keeps the rate limit and audit record for failures.
+- atlas-ui forwards `stepup.verify {pin}` over `core.sock` (the peer is checked) and relays the `stepup.granted` token core returns.
+- The PIN still never enters any LLM context or log.
+
+**Bump:** services.md MINOR (credential ownership). events.v1 is unchanged on the wire.
+
+**Affected:** atlas-ui (Phase 2), atlas-core, provisioning (the credential moves).
+
+Until this lands, a compromised atlas-ui could approve any pending action. Everything else still holds: the exact payload hash, single use, the executor's checks, and the durable audit trail.
+
+## 7. The executor enforces the channel allowlist and a send rate limit (services.md; review F11, same review)
+
+**The gap.** The Discord channel allowlist and any sending rate are enforced in core, by the policy engine and the proposer. The executor checks only that a payload was approved, not where it goes or how often.
+
+If core's signing key were stolen, or core itself compromised, the executor would post to any channel and send at any rate. That is a privilege the executor holds alone, so its own guardrails belong in the executor too.
+
+**Proposal:**
+- The executor's configuration (next to the approval public key) carries the Discord channel allowlist.
+- Optionally, a recipient-domain policy.
+- A per-kind send rate limit (for example, 20 emails an hour, 20 posts an hour).
+- The executor refuses with `CHANNEL_NOT_ALLOWLISTED` or `RATE_LIMITED`, and records both.
+- Document the config file and its owner in services.md.
+
+**Bump:** services.md MINOR. Two new `action.resolved` codes in the catalogue (PATCH).
+
+**Affected:** atlas-executor (Phase 6), provisioning.
+
+## 8. A `research.run` action kind (events.v1 and audit-record.v1, MINOR)
+
+Since review F7, `queue_research` is refused (`RESEARCH_NEEDS_USER`) once a request has seen untrusted-derived data, because research takes only the user's own question (§2.13). The safer middle ground is to let the planner *propose* the research for the user to approve, but `ActionKind` has no one-off research kind.
+
+**Proposal:** add `research.run` to `ActionKind` in both schemas, with payload `{kind, question}` (the question being single-line, ≤ 300 characters, and `x-atlas-untrusted`). atlas-core would turn the refusal into a proposal. Approval would enqueue the task in core and never involve the executor.
