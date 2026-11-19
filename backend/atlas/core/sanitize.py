@@ -2,13 +2,16 @@
 
 What the reader sees is what a human would see, bounded in size:
 
-* **Size.** Raw input is cut at ``MAX_RAW_BYTES`` before any parsing (bounded CPU), and the visible
-  text at ``MAX_VISIBLE_CHARS``. Both set ``TRUNCATED``.
+* **Size.** Raw input is cut before any parsing (``MAX_RAW_BYTES``; ``MAX_HTML_BYTES`` for HTML), and
+  the visible text at ``MAX_VISIBLE_CHARS``. Both set ``TRUNCATED``. Parsing is linear in the input:
+  nesting deeper than ``MAX_DEPTH`` is treated as hidden, and an end tag only closes an element within
+  the last ``END_TAG_SEARCH`` open ones (review F1).
 * **HTML.** Only visible text survives. Dropped: ``script``/``style``/``head``/``template``/
   ``noscript``/``iframe``/``object``/``svg`` and similar; comments; elements with the ``hidden``
   attribute, ``aria-hidden="true"`` or ``type=hidden``; inline styles that hide text
-  (``display:none``, ``visibility:hidden``, zero font size, zero opacity, white or transparent text,
-  zero-size boxes with hidden overflow, off-screen positioning, clipping, big negative indents);
+  (``display:none``, ``visibility:hidden``, ``mso-hide:all``, tiny font sizes, opacity below 0.1, white,
+  transparent or background-coloured text when both colours are inline, zero-size or 1px boxes with
+  hidden overflow, off-screen positioning, clipping, big negative indents, ``scale(0)``);
   ``<font color=white>`` and ``<font size=0>``. Hiding through a stylesheet class cannot be resolved
   without a CSS engine, so a ``<style>`` block that contains hiding rules sets ``HIDDEN_HTML`` too.
 * **Unicode.** Removed: zero-width characters, bidi controls, Unicode tag characters (U+E0000..E007F,
@@ -31,6 +34,7 @@ from html.parser import HTMLParser
 from typing import Final
 
 MAX_RAW_BYTES: Final = 1024 * 1024
+MAX_HTML_BYTES: Final = 256 * 1024  # HTML is parsed, so it gets a tighter cap (review F1)
 MAX_VISIBLE_CHARS: Final = 12_000
 
 
@@ -151,20 +155,121 @@ _BLOCK_TAGS: Final = frozenset(
         "footer",
     }
 )
-_WHITE: Final = r"(?:white|#fff(?:fff)?\b|rgba?\(\s*255\s*,\s*255\s*,\s*255\s*(?:,\s*[\d.]+\s*)?\)|transparent|hsla?\(\s*\d+\s*,\s*\d+%\s*,\s*100%)"
-_HIDING_CSS: Final = re.compile(
-    r"display\s*:\s*none"
-    r"|visibility\s*:\s*(?:hidden|collapse)"
-    r"|font-size\s*:\s*0*\.?0*(?:px|pt|em|rem|%|vw|vh)?\s*(?:;|$|!)"
-    r"|font-size\s*:\s*0*\.?[0-4](?:px|pt)\b"
-    r"|opacity\s*:\s*0*\.?0*\s*(?:;|$|!)"
-    r"|(?<![-\w])color\s*:\s*" + _WHITE + r"|(?:max-)?(?:height|width)\s*:\s*0(?:px|em|rem|%)?\s*(?:;|$|!)"
-    r"|(?:left|top|right|bottom|text-indent|margin-left|margin-top)\s*:\s*-\s*\d{3,}"
-    r"|clip(?:-path)?\s*:\s*(?:rect\(\s*0|inset\(\s*(?:50|100)%)"
-    r"|transform\s*:\s*scale\(\s*0",
+# Inline-style hiding (F10). Declarations are parsed one by one; no cascade, no stylesheet resolution.
+_NAMED: Final = {
+    "white": (255, 255, 255),
+    "black": (0, 0, 0),
+    "silver": (192, 192, 192),
+    "gray": (128, 128, 128),
+    "grey": (128, 128, 128),
+    "red": (255, 0, 0),
+    "green": (0, 128, 0),
+    "blue": (0, 0, 255),
+    "yellow": (255, 255, 0),
+}
+_HEX: Final = re.compile(r"#([0-9a-f]{3,8})\b")
+_RGB: Final = re.compile(r"rgba?\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*(?:[,/]\s*([\d.]+%?)\s*)?\)")
+_LENGTH: Final = re.compile(r"^(-?\d*\.?\d+)\s*(px|pt|em|rem|%|vw|vh|ex|ch)?$")
+_NEAR_COLOUR: Final = 24  # max per-channel difference that counts as "same colour as the background"
+_STYLESHEET_HIDING: Final = re.compile(
+    r"display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse)|opacity\s*:\s*0|font-size\s*:\s*0|mso-hide\s*:\s*all",
     re.IGNORECASE,
 )
-_FONT_WHITE: Final = re.compile(r"^\s*" + _WHITE + r"\s*$", re.IGNORECASE)
+_FONT_WHITE: Final = frozenset({"white", "#fff", "#ffffff", "transparent"})
+MAX_DEPTH: Final = 256  # deeper nesting is treated as hidden (and flagged)
+END_TAG_SEARCH: Final = 32  # how far back an end tag may close an element
+
+
+def _colour(value: str) -> tuple[int, int, int, float] | None:
+    """(r, g, b, alpha) for the first colour in a CSS value, or None."""
+    v = value.strip().lower()
+    if v == "transparent":
+        return (0, 0, 0, 0.0)
+    for word in v.split():
+        if word in _NAMED:
+            return (*_NAMED[word], 1.0)
+    m = _HEX.search(v)
+    if m:
+        h = m.group(1)
+        if len(h) in (3, 4):
+            h = "".join(c * 2 for c in h)
+        if len(h) not in (6, 8):
+            return None
+        alpha = int(h[6:8], 16) / 255 if len(h) == 8 else 1.0
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+    m = _RGB.search(v)
+    if m:
+        alpha_text = m.group(4)
+        alpha = 1.0
+        if alpha_text:
+            alpha = float(alpha_text[:-1]) / 100 if alpha_text.endswith("%") else float(alpha_text)
+        return (min(int(m.group(1)), 255), min(int(m.group(2)), 255), min(int(m.group(3)), 255), alpha)
+    return None
+
+
+def _length(value: str) -> tuple[float, str] | None:
+    m = _LENGTH.match(value.strip().lower())
+    if m is None:
+        return None
+    return float(m.group(1)), m.group(2) or "px"
+
+
+def _declarations(style: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for decl in style.split(";"):
+        name, sep, value = decl.partition(":")
+        if sep:
+            out[name.strip().lower()] = value.lower().replace("!important", "").strip()
+    return out
+
+
+def _tiny_font(value: str) -> bool:
+    length = _length(value)
+    if length is None:
+        return False
+    n, unit = length
+    limits = {"px": 1.5, "pt": 1.5, "em": 0.2, "rem": 0.2, "%": 20, "ex": 0.4, "ch": 0.4, "vw": 0.1, "vh": 0.1}
+    return n < limits.get(unit, 1.0)
+
+
+def _style_hides(style: str) -> bool:
+    d = _declarations(style)
+    if d.get("display") == "none" or d.get("visibility") in ("hidden", "collapse"):
+        return True
+    if d.get("mso-hide") == "all":
+        return True
+    if "font-size" in d and _tiny_font(d["font-size"]):
+        return True
+    opacity = _length(d.get("opacity", "1"))
+    if opacity is not None and (opacity[0] / 100 if opacity[1] == "%" else opacity[0]) < 0.1:
+        return True
+    clipped = (
+        d.get("overflow") in ("hidden", "clip") or d.get("overflow-x") == "hidden" or d.get("overflow-y") == "hidden"
+    )
+    for prop in ("height", "width", "max-height", "max-width"):
+        length = _length(d.get(prop, ""))
+        if length is not None and (length[0] == 0 or (clipped and length[1] in ("px", "pt") and length[0] <= 1)):
+            return True
+    for prop in ("left", "top", "right", "bottom", "text-indent", "margin-left", "margin-top"):
+        length = _length(d.get(prop, ""))
+        if length is not None and length[0] <= -100:
+            return True
+    if d.get("clip", "").startswith("rect(0") or re.match(r"inset\(\s*(?:50|100)%", d.get("clip-path", "")):
+        return True
+    if re.match(r"scale\(\s*0(?:\.0+)?\s*[,)]", d.get("transform", "")):
+        return True
+    colour = _colour(d["color"]) if "color" in d else None
+    if colour is not None:
+        if colour[3] < 0.1 or colour[:3] == (255, 255, 255):
+            return True
+        background = _colour(d.get("background-color", d.get("background", "")))
+        if (
+            background is not None
+            and background[3] >= 0.9
+            and max(abs(a - b) for a, b in zip(colour[:3], background[:3], strict=True)) <= _NEAR_COLOUR
+        ):
+            return True
+    return False
 
 
 def _hides(tag: str, attrs: dict[str, str | None]) -> bool:
@@ -174,11 +279,10 @@ def _hides(tag: str, attrs: dict[str, str | None]) -> bool:
         return True
     if tag == "input" and (attrs.get("type") or "").strip().lower() == "hidden":
         return True
-    style = attrs.get("style") or ""
-    if _HIDING_CSS.search(style):
+    if _style_hides(attrs.get("style") or ""):
         return True
     if tag == "font":
-        if _FONT_WHITE.match(attrs.get("color") or ""):
+        if (attrs.get("color") or "").strip().lower() in _FONT_WHITE:
             return True
         if (attrs.get("size") or "").strip() in ("0", "-7", "-6"):
             return True
@@ -186,15 +290,20 @@ def _hides(tag: str, attrs: dict[str, str | None]) -> bool:
 
 
 class _VisibleText(HTMLParser):
+    """Visible-text extractor. Every callback is O(1) amortized (review F1): a hidden-depth counter
+    instead of scanning the stack, a depth cap, and a bounded search for the element an end tag closes."""
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.stack: list[tuple[str, bool]] = []  # (tag, hides its subtree)
+        self.hidden_depth = 0  # how many entries on the stack hide their subtree
+        self.overflow = False  # nesting went past MAX_DEPTH: everything after is treated as hidden
         self.hidden_seen = False
 
     @property
     def _hidden(self) -> bool:
-        return any(h for _, h in self.stack)
+        return self.overflow or self.hidden_depth > 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
@@ -204,9 +313,15 @@ class _VisibleText(HTMLParser):
             self.hidden_seen = True
         if tag in _BLOCK_TAGS and not self._hidden:
             self.parts.append("\n")
-        if tag in _VOID_TAGS:
+        if tag in _VOID_TAGS or self.overflow:
             return
-        self.stack.append((tag, attr_hidden or tag in _SKIP_TAGS))
+        if len(self.stack) >= MAX_DEPTH:
+            self.overflow = True
+            self.hidden_seen = True
+            return
+        hides = attr_hidden or tag in _SKIP_TAGS
+        self.stack.append((tag, hides))
+        self.hidden_depth += hides
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
@@ -217,21 +332,21 @@ class _VisibleText(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        for i in range(len(self.stack) - 1, -1, -1):
+        stop = max(0, len(self.stack) - END_TAG_SEARCH)
+        for i in range(len(self.stack) - 1, stop - 1, -1):
             if self.stack[i][0] == tag:
+                self.hidden_depth -= sum(1 for _, h in self.stack[i:] if h)  # at most END_TAG_SEARCH entries
                 del self.stack[i:]
                 break
         if tag in _BLOCK_TAGS and not self._hidden:
             self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
-        if not self.stack:
-            self.parts.append(data)
-            return
         if self._hidden:
-            if self.stack[-1][0] == "style" and _HIDING_CSS.search(data):
+            top = self.stack[-1][0] if self.stack else ""
+            if top == "style" and _STYLESHEET_HIDING.search(data):
                 self.hidden_seen = True  # a stylesheet that can hide content we cannot resolve
-            elif self.stack[-1][0] not in _SKIP_TAGS and data.strip():
+            elif top not in _SKIP_TAGS and data.strip():
                 self.hidden_seen = True
             return
         self.parts.append(data)
@@ -260,6 +375,8 @@ def sanitize(
     raw: bytes, media_type: str, *, max_raw_bytes: int = MAX_RAW_BYTES, max_chars: int = MAX_VISIBLE_CHARS
 ) -> Sanitized:
     flags: set[ContentFlag] = set()
+    if media_type == "text/html":
+        max_raw_bytes = min(max_raw_bytes, MAX_HTML_BYTES)
     if len(raw) > max_raw_bytes:
         raw = raw[:max_raw_bytes]
         flags.add(ContentFlag.TRUNCATED)

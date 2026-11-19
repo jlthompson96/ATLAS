@@ -19,6 +19,7 @@ The reader's prompt is never visible to the planner, and the planner never sees 
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from collections.abc import Callable
@@ -60,7 +61,7 @@ _SCHEMAS: Final[dict[ReaderTask, Obj]] = {
         {
             "category": Enum(CATEGORIES),
             "suspicious": Bool(),
-            "requests": Array(Enum(REQUEST_KINDS), max_items=4),
+            "requests": Array(Enum(REQUEST_KINDS), max_items=4, unique=True),
             "link_count": Int(0, 1000),
         },
         required=frozenset({"category", "suspicious", "requests", "link_count"}),
@@ -156,7 +157,17 @@ class QuarantinedReader:
         item = var.value
         if not isinstance(item, UntrustedContent):
             raise ReaderRefused("NOT_AN_ITEM")
-        prompt = build_prompt(item, task, max_chars=self._max_chars(), nonce=self._nonce())
+        remaining = deadline - self._monotonic()
+        if remaining <= 0:
+            raise ReaderRefused("READER_TIMEOUT")
+        # Sanitizing is CPU work on attacker-sized input: off the event loop and inside the deadline (review F1).
+        try:
+            prompt = await asyncio.wait_for(
+                asyncio.to_thread(build_prompt, item, task, max_chars=self._max_chars(), nonce=self._nonce()),
+                timeout=remaining,
+            )
+        except TimeoutError:
+            raise ReaderRefused("READER_TIMEOUT") from None
         schema = _SCHEMAS[task]
         text_parts: list[str] = []
         usage = (0, 0)
@@ -216,6 +227,8 @@ def _convert(
     if isinstance(spec, Array):
         if not value:
             lines.append((TrustedText(f"{path}: (none)"),))
+        if isinstance(spec.item, Enum):
+            value = sorted(value)  # the order the reader chose is not passed on (covert-channel reduction)
         for i, element in enumerate(value):
             _convert(spec.item, element, f"{path}[{i}]", store, item, refs, lines)
         return
