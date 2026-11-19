@@ -234,6 +234,9 @@ class PendingActionStore:
             raise OverflowError("too many pending actions")
         self._actions[action.action_id] = action
 
+    def has_capacity(self) -> bool:
+        return len(self.pending()) < self.MAX_PENDING
+
     def get(self, action_id: str) -> PendingAction | None:
         return self._actions.get(action_id)
 
@@ -280,6 +283,10 @@ class ActionProposer:
     ) -> PendingAction:
         if decision.verdict is not Verdict.PROPOSE:
             raise ProposalFailed("NOT_A_PROPOSAL")
+        if not self._store.has_capacity():
+            # Checked before auditing, so a full queue never leaves an action_proposed record with no action
+            # behind it (review F8).
+            raise ProposalFailed("PENDING_LIMIT")
         if validate_payload(draft.payload):
             raise ProposalFailed("INVALID_PAYLOAD")
         canonical = canonical_text(draft.payload)

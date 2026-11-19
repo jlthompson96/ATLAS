@@ -18,7 +18,8 @@ Rules:
 5. A tool tag outside the context's registry tags is denied (unattended has no queue or write).
 6. Read and queue tools refuse ``$VAR`` arguments. This is stricter than "tainted arguments force a
    proposal": a read has nothing to propose, and a tainted research question would be an
-   exfiltration channel (RT-8, T5).
+   exfiltration channel (RT-8, T5). A queue tool is also refused once the request has been influenced
+   by untrusted data (review F7): research takes only the user's own question (§2.13).
 7. ``ask_reader`` must name an untrusted item; that is its whole purpose (the quarantine).
 8. Every ``propose_action`` is a proposal. Nothing executes without approval. Tainted arguments, or
    a planner context that has seen untrusted-derived data in this request, set
@@ -150,8 +151,15 @@ def decide(inp: PolicyInput) -> Decision:
     if inp.tool_tag in (ToolTag.READ, ToolTag.QUEUE):
         if inp.args.has_refs:
             return _deny("TAINTED_ARG_REFUSED")
-        if inp.tool_tag is ToolTag.QUEUE and inp.calls_so_far.get(inp.tool_name, 0) >= MAX_QUEUE_PER_REQUEST:
-            return _deny("QUEUE_LIMIT")
+        if inp.tool_tag is ToolTag.QUEUE:
+            if inp.influence.tainted:
+                # §2.13: research's only input is the user's own question. Once this request has seen
+                # untrusted-derived data the planner's "question" may be shaped by it (review F7). There is
+                # no action kind for a one-off research run to propose, so this is refused outright and
+                # the user asks again directly (contracts/proposals/2026-11-18-security-core-followups.md).
+                return _deny("RESEARCH_NEEDS_USER")
+            if inp.calls_so_far.get(inp.tool_name, 0) >= MAX_QUEUE_PER_REQUEST:
+                return _deny("QUEUE_LIMIT")
         return Decision(Verdict.ALLOW_READ, ("READ",))
 
     # ToolTag.PROPOSE

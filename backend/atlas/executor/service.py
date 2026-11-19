@@ -72,8 +72,9 @@ class Executor:
         self.executions += 1
         try:
             outcome = await sender.send(verified.payload)
-        except Exception:
-            log.exception("sender raised for %s", verified.record.action_id)
+        except Exception as exc:
+            # Type only: a provider error message or traceback can quote the payload (review, executor logging).
+            log.error("sender raised %s for %s", type(exc).__name__, verified.record.action_id)
             outcome = None
         ok = outcome is not None and outcome.ok
         code = None if ok else (outcome.code if outcome is not None and outcome.code else "SEND_FAILED")
