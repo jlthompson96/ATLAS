@@ -158,7 +158,7 @@ def test_step_up_is_required_bound_to_the_device_and_expires() -> None:
     assert decide(h, event).code == "STEP_UP_REQUIRED"  # granted to another device
     h.stepups.register("hud-remote", "another-token-abcdefgh", h.clock.wall() + 60_000)
     h.clock.advance(61)
-    assert decide(h, event, step_up_token="another-token-abcdefgh").code == "STEP_UP_REQUIRED"  # expired
+    assert decide(h, event, step_up_token="another-token-abcdefgh").code == "STEP_UP_REQUIRED"  # noqa: S106 - expired
     h.assert_no_unapproved_action()
 
 
