@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from typing import Any, Final
 
 from atlas.audit.jcs import canonicalize
 from atlas.core.schema import strict_json_loads
+from atlas.core.taint import valid_resource_id
 from atlas.policy.types import ActionKind
 
 MAX_CANONICAL_CHARS: Final = 65_536  # events.v1 action.pending.payload_canonical maxLength
@@ -39,7 +41,6 @@ EMAIL_RE: Final = re.compile(
     r"@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}"
 )
 DISCORD_ID_RE: Final = re.compile(r"[0-9]{17,20}")
-RESOURCE_REF_RE: Final = re.compile(r"[a-z][a-z0-9_]*:[A-Za-z0-9_.:/@+=-]{1,180}")
 
 
 def normalize_address(address: str) -> str:
@@ -51,12 +52,29 @@ def valid_email(address: Any) -> bool:
     return isinstance(address, str) and len(address) <= 254 and EMAIL_RE.fullmatch(address) is not None
 
 
+def _invisible(ch: str) -> bool:
+    """Control (Cc) and format (Cf) characters other than newline and tab: ESC, bidi overrides, zero-width."""
+    return ch not in "\n\t" and unicodedata.category(ch) in ("Cc", "Cf")
+
+
+def display_clean(text: str) -> str:
+    """What atlas-core puts in a payload (review F9): CR/LF normalized, invisible characters removed.
+
+    Removing rather than flagging means the payload a human approves is exactly what they can see, and
+    no new events.v1 warning is needed. The cost: a zero-width joiner inside an emoji sequence, or a bidi
+    mark in right-to-left text, is dropped too. ``validate_payload`` refuses anything not cleaned, so
+    the executor never sends invisible characters either.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(ch for ch in text if not _invisible(ch))
+
+
 def _text(value: Any, max_len: int, *, min_len: int = 0, single_line: bool = False) -> bool:
     if not isinstance(value, str) or not min_len <= len(value) <= max_len:
         return False
-    if "\x00" in value:
+    if any(_invisible(ch) for ch in value):
         return False
-    return not (single_line and ("\r" in value or "\n" in value))
+    return not (single_line and "\n" in value)
 
 
 def _exact_keys(payload: dict[str, Any], required: set[str], optional: set[str]) -> list[str]:
@@ -86,9 +104,7 @@ def _email_errors(p: dict[str, Any]) -> list[str]:
         errors.append("subject: invalid")
     if not _text(p["body"], MAX_EMAIL_BODY, min_len=1):
         errors.append("body: invalid")
-    if "in_reply_to" in p and (
-        not isinstance(p["in_reply_to"], str) or not RESOURCE_REF_RE.fullmatch(p["in_reply_to"])
-    ):
+    if "in_reply_to" in p and not valid_resource_id(p["in_reply_to"]):
         errors.append("in_reply_to: invalid")
     return errors
 

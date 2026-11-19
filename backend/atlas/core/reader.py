@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final
 
-from atlas.core.prompt import PromptPart, TrustedText
+from atlas.core.prompt import PromptPart, gen
 from atlas.core.sanitize import MAX_VISIBLE_CHARS, ContentFlag, sanitize
 from atlas.core.schema import Array, Bool, Enum, Field, Int, Obj, Str, strict_json_loads
 from atlas.core.taint import TaintedStr, UntrustedContent, VariableStore, VarRef
@@ -202,7 +202,7 @@ class QuarantinedReader:
         lines: list[tuple[PromptPart, ...]] = []
         _convert(schema, value, "", store, item, refs, lines)
         if prompt.flags:
-            lines.append((TrustedText("content_flags: " + ", ".join(sorted(f.value for f in prompt.flags))),))
+            lines.append((gen("content_flags: {flags}", flags=", ".join(sorted(f.value for f in prompt.flags))),))
         return ReaderResult(task, item_ref, tuple(lines), tuple(refs), prompt.flags, usage[0], usage[1])
 
 
@@ -226,7 +226,7 @@ def _convert(
         return
     if isinstance(spec, Array):
         if not value:
-            lines.append((TrustedText(f"{path}: (none)"),))
+            lines.append((gen("{path}: (none)", path=path),))
         if isinstance(spec.item, Enum):
             value = sorted(value)  # the order the reader chose is not passed on (covert-channel reduction)
         for i, element in enumerate(value):
@@ -239,16 +239,16 @@ def _convert(
         tainted = TaintedStr(value, item.provenance)
         ref = store.bind_text(_PREFIX.get(leaf, "TEXT"), tainted, f"reader {leaf}")
         refs.append(ref)
-        lines.append((TrustedText(f"{path}: "), ref))
+        lines.append((gen("{path}: ", path=path), ref))
         return
     if isinstance(spec, Enum):
         canonical = next(v for v in spec.values if v == value)  # our own constant, not the model's string
-        lines.append((TrustedText(f"{path}: {canonical}"),))
+        lines.append((gen("{path}: {value}", path=path, value=canonical),))
         return
     if isinstance(spec, Bool):
-        lines.append((TrustedText(f"{path}: {'true' if value is True else 'false'}"),))
+        lines.append((gen("{path}: {value}", path=path, value=value is True),))
         return
     if isinstance(spec, Int):
-        lines.append((TrustedText(f"{path}: {int(value)}"),))
+        lines.append((gen("{path}: {value}", path=path, value=int(value)),))
         return
     raise ReaderRefused("READER_SCHEMA_INVALID")

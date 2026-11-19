@@ -36,6 +36,7 @@ from atlas.policy.payloads import (
     MAX_EMAIL_BODY,
     PROPOSABLE_KINDS,
     canonical_text,
+    display_clean,
     payload_sha256,
     valid_email,
     validate_payload,
@@ -133,13 +134,13 @@ def draft_payload(args: Mapping[str, Any], store: VariableStore, channel_labels:
                 recipients[name].append(Recipient(address, from_var))
         subject, from_var = _text_of(args["subject"], store, used)
         has_refs |= from_var
-        subject = " ".join(subject.split())[:200]
+        subject = " ".join(display_clean(subject).split())[:200]
         body_parts: list[str] = []
         for part in args["body"]:
             text, from_var = _text_of(part, store, used)
             has_refs |= from_var
             body_parts.append(text)
-        body = "".join(body_parts)
+        body = display_clean("".join(body_parts))
         if len(body) > MAX_EMAIL_BODY:
             raise DraftError("PAYLOAD_TOO_LARGE")
         payload = {
@@ -169,12 +170,12 @@ def draft_payload(args: Mapping[str, Any], store: VariableStore, channel_labels:
         payload = {
             "kind": kind,
             "channel_id": channel_id,
-            "channel_label": channel_labels.get(channel_id, channel_id),
-            "content": "".join(parts),
+            "channel_label": display_clean(channel_labels.get(channel_id, channel_id)),
+            "content": display_clean("".join(parts)),
         }
         action = ProposedAction(kind, channel_id=channel_id)
     else:  # research.schedule: literal question only (research never sees private data, §2.13)
-        payload = {"kind": kind, "question": args["question"], "every_minutes": args["every_minutes"]}
+        payload = {"kind": kind, "question": display_clean(args["question"]), "every_minutes": args["every_minutes"]}
         action = ProposedAction(kind, every_minutes=args["every_minutes"])
     provenance = EMPTY_PROVENANCE.union(*used)
     return Draft(kind, payload, ArgTaint(has_refs=has_refs, provenance=provenance), action)

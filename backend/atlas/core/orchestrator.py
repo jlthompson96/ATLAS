@@ -22,7 +22,6 @@ Per request::
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import secrets
@@ -35,10 +34,10 @@ from typing import Any, Final
 from atlas.audit.client import AuditError
 from atlas.core.auditing import AuditSink, tool_call_record
 from atlas.core.pending import ProposalFailed
-from atlas.core.prompt import PlannerContext, PromptPart, TrustedText
+from atlas.core.prompt import PlannerContext, PromptPart, TrustedText, authored_texts, gen
 from atlas.core.registry import REGISTRY_BUILDERS, ToolRegistry
-from atlas.core.schema import SchemaError, strict_json_loads
-from atlas.core.taint import EMBEDDED_VAR_RE, TaintLeak, VariableStore
+from atlas.core.schema import SchemaError, collect_refs, strict_json_loads
+from atlas.core.taint import EMBEDDED_VAR_RE, Provenance, TaintLeak, VariableStore
 from atlas.core.tools import RequestCtx, ToolDeps, ToolError, ToolOutput, text_output
 from atlas.llm.interface import (
     AuthenticationFailed,
@@ -180,6 +179,8 @@ class Orchestrator:
             deadline=self._monotonic() + budget.wall_s,
             audit=self._audit,
         )
+        # Drop expired variables and items the index no longer holds, with their fingerprints (F2, F8).
+        store.prune(self._deps.index.resource_ids())
         registry = self.registry(context)
         specs = registry.specs()
         corpus = [s.description for s in specs] + [str(s.parameters) for s in specs]
@@ -194,6 +195,11 @@ class Orchestrator:
         except AuditError:
             outcome.code = "AUDIT_UNAVAILABLE"
             outcome.go(Phase.FAILED)
+        except Exception as exc:  # review F8: never let a bug escape as an exception carrying content
+            log.error("request %s failed internally: %s", outcome.request_id, type(exc).__name__)
+            outcome.code = "INTERNAL"
+            if outcome.phase not in TERMINAL:
+                outcome.go(Phase.FAILED)
         finally:
             outcome.steps, outcome.tokens = rc.steps, rc.tokens
             outcome.pending_actions = list(rc.pending_actions)
@@ -235,11 +241,20 @@ class Orchestrator:
                     outcome.tool_calls += 1
                     if outcome.tool_calls > budget.max_tool_calls:
                         raise _Stop(Phase.BUDGET_EXHAUSTED, "TOOL_CALL_BUDGET")
+                    if rc.steps >= budget.max_steps:  # reader calls are steps too
+                        raise _Stop(Phase.BUDGET_EXHAUSTED, "STEP_BUDGET")
                     out = await self._dispatch(call, registry, rc)
                     if out.status != "ok" and out.code is not None:
                         outcome.refusals.append(out.code)
                     malformed_streak = malformed_streak + 1 if out.code in MALFORMED_CODES else 0
-                    planner.add_tool_result(call.id, out.parts())
+                    if not planner.add_tool_result(call.id, out.parts()):
+                        # The result carried tainted text: withheld (the planner sees a fixed refusal), and
+                        # recorded, but the request goes on (review F2).
+                        outcome.refusals.append("TOOL_RESULT_WITHHELD")
+                        await self._audit.append(
+                            {"kind": "system", "context": rc.context.value, "correlation_id": rc.correlation_id,
+                             "system": {"event": "error_forwarded", "code": "TOOL_RESULT_WITHHELD"}}
+                        )  # fmt: skip
                 if malformed_streak >= budget.max_malformed:
                     raise _Stop(Phase.FAILED, "MODEL_MALFORMED")
                 outcome.go(Phase.PLANNING)
@@ -287,11 +302,13 @@ class Orchestrator:
                 context=rc.context, correlation_id=rc.correlation_id, tool=tool, args=args, status=status, code=code
             )
         )
-        return text_output(f"refused: {code}", status=status, code=code)
+        return text_output(gen("refused: {code}", code=code), status=status, code=code)
 
     async def _dispatch(self, call: ToolCall, registry: ToolRegistry, rc: RequestCtx) -> ToolOutput:
         tool = registry.get(call.name)
-        if rc.store.index.contains(call.arguments_json) or rc.store.index.contains(call.name):
+        # Whatever the model wrote (name, raw arguments, every decoded string) must not carry tainted text:
+        # the tool never runs if it does (review F2, M5).
+        if any(rc.store.index.contains(text) for text in authored_texts(call)):
             return await self._refuse(rc, call.name, {}, "TAINT_LEAK", "refused")
         if tool is None:
             decision = decide(PolicyInput(rc.context, call.name, None, False))
@@ -302,12 +319,13 @@ class Orchestrator:
             return await self._refuse(rc, tool.name, {}, "MALFORMED_ARGS", "refused")
         if not isinstance(args, dict):
             return await self._refuse(rc, tool.name, {}, "MALFORMED_ARGS", "refused")
-        if rc.store.index.contains(json.dumps(args, ensure_ascii=False)):  # after JSON escapes are decoded
-            return await self._refuse(rc, tool.name, {}, "TAINT_LEAK", "refused")
         try:
             tool.args.validate(args)
         except SchemaError:
             return await self._refuse(rc, tool.name, args, "INVALID_ARGS", "refused")
+        # Whatever happens next (including a refusal that reveals something about a $VAR, such as
+        # INVALID_RECIPIENT), the planner's next step now depends on the referenced values (review F6).
+        rc.influence = rc.influence.union(*self._referenced_provenance(args, rc))
         try:
             prepared = tool.prepare(args, rc)
         except ToolError as exc:
@@ -348,6 +366,15 @@ class Orchestrator:
                 status=out.status, code=out.code, data_accessed=out.data_accessed,
             )
         )  # fmt: skip
+        return out
+
+    @staticmethod
+    def _referenced_provenance(args: Mapping[str, Any], rc: RequestCtx) -> list[Provenance]:
+        out = []
+        for name in collect_refs(dict(args)):
+            var = rc.store.lookup(name)
+            if var is not None:
+                out.append(var.provenance)
         return out
 
 

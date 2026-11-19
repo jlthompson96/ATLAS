@@ -25,7 +25,7 @@ from typing import Any, ClassVar, Final
 from atlas.core.auditing import AuditSink, DataRef, tool_call_record
 from atlas.core.index import ItemIndex
 from atlas.core.pending import PROPOSE_ARGS, ActionProposer, Draft, DraftError, EventSink, draft_payload
-from atlas.core.prompt import PromptPart, TrustedText, t
+from atlas.core.prompt import AtlasText, PromptPart, TrustedText, gen, t
 from atlas.core.reader import QuarantinedReader, ReaderRefused, ReaderTask
 from atlas.core.schema import Bool, Enum, Int, Obj, PlainText, Ref, collect_refs
 from atlas.core.taint import (
@@ -36,6 +36,7 @@ from atlas.core.taint import (
     UntrustedContent,
     VariableStore,
     VarRef,
+    size_bucket,
 )
 from atlas.llm.interface import ToolSpec
 from atlas.memory.store import MemoryStore
@@ -87,13 +88,15 @@ class ToolOutput:
         out: list[PromptPart] = []
         for i, line in enumerate(self.lines):
             if i:
-                out.append(TrustedText("\n"))
+                out.append(t("\n"))
             out.extend(line)
         return out
 
 
-def text_output(text: str, *, status: str = "ok", code: str | None = None) -> ToolOutput:
-    return ToolOutput(((TrustedText(text),),), status=status, code=code)
+def text_output(text: AtlasText, *, status: str = "ok", code: str | None = None) -> ToolOutput:
+    if not isinstance(text, AtlasText):
+        raise TypeError("text_output takes ATLAS-generated text (t() or gen())")
+    return ToolOutput(((text,),), status=status, code=code)
 
 
 def arg_taint(args: Mapping[str, Any], store: VariableStore) -> ArgTaint:
@@ -146,7 +149,7 @@ class GetTime(Tool):
 
     async def run(self, args: Mapping[str, Any], prepared: Prepared, decision: Decision, rc: RequestCtx) -> ToolOutput:
         now = datetime.fromtimestamp(self._clock() / 1000, UTC)
-        return text_output(now.strftime("now: %Y-%m-%dT%H:%M:%SZ (%A)"))
+        return text_output(gen("now: {now}", now=now.strftime("%Y-%m-%dT%H:%M:%SZ (%A)")))
 
 
 _SOURCE_PREFIX: Final = {
@@ -187,14 +190,20 @@ class ReadIndex(Tool):
             ref = rc.store.bind_item(prefix, item, f"{item.source.kind.value} item")
             parts: list[PromptPart] = [
                 ref,
-                t(
-                    f" {item.source.resource_id}, received {_iso(item.source.observed_at_ms)}, "
-                    f"{item.byte_len} bytes{', unread' if item.unread else ''}; from "
+                gen(
+                    " {rid}, received {at}, {size}{unread}; from ",
+                    rid=item.source.resource_id,
+                    at=_iso(item.source.observed_at_ms),
+                    size=size_bucket(item.byte_len),
+                    unread=", unread" if item.unread else "",
                 ),
             ]
             contact = self._index.contact_name(item)
             if contact is not None:
-                parts.append(t(f"contact '{contact}' (claimed)"))
+                try:
+                    parts.append(gen("contact '{name}' (claimed)", name=contact))
+                except TypeError:
+                    parts.append(t("a configured contact (claimed)"))
             elif item.sender is not None:
                 parts.append(rc.store.bind_text("FROM", item.sender, "sender"))
             else:
@@ -231,11 +240,12 @@ class SearchMemory(Tool):
         for hit in hits:
             if hit.tainted_value is not None:
                 ref = rc.store.bind_text("MEM", hit.tainted_value, "memory from an untrusted source")
-                lines.append((t(f"{hit.resource_id} (learned from untrusted content): "), ref))
+                lines.append((gen("{rid} (learned from untrusted content): ", rid=hit.resource_id), ref))
                 accessed.append(DataRef(hit.resource_id, hit.tainted_value.byte_len, hit.tainted_value.sha256(), True))
                 influence = influence.union(hit.tainted_value.provenance)
             elif hit.text is not None:
-                lines.append((t(f"{hit.resource_id} (the user said): {hit.text}"),))
+                # The row text is the user's words, not ATLAS's: TrustedText, so it is leak-scanned (F2).
+                lines.append((gen("{rid} (the user said): ", rid=hit.resource_id), TrustedText(hit.text)))
                 raw = hit.text.encode("utf-8")
                 accessed.append(DataRef(hit.resource_id, len(raw), hashlib.sha256(raw).hexdigest(), False))
         if not lines:
@@ -261,7 +271,7 @@ class AskReader(Tool):
         ref = VarRef(args["item"])
         var = rc.store.get(ref)
         if not isinstance(var.value, UntrustedContent):
-            return text_output("refused: NOT_AN_ITEM", status="refused", code="NOT_AN_ITEM")
+            return text_output(t("refused: NOT_AN_ITEM"), status="refused", code="NOT_AN_ITEM")
         item = var.value
         task = ReaderTask(args["task"])
         accessed = (DataRef(item.source.resource_id, item.byte_len, item.sha256(), True),)
@@ -276,7 +286,11 @@ class AskReader(Tool):
                 )
             )  # fmt: skip
             return ToolOutput(
-                ((t(f"reader refused this item: {exc.code}"),),), accessed, item.provenance, "refused", exc.code
+                ((gen("reader refused this item: {code}", code=exc.code),),),
+                accessed,
+                item.provenance,
+                "refused",
+                exc.code,
             )
         rc.tokens += result.prompt_tokens + result.completion_tokens
         await rc.audit.append(
@@ -285,7 +299,7 @@ class AskReader(Tool):
                 args={"item": ref.name}, status="ok", data_accessed=accessed,
             )
         )  # fmt: skip
-        lines = ((ref, t(f" {task.value}:")), *result.lines)
+        lines = ((ref, gen(" {task}:", task=task.value)), *result.lines)
         return ToolOutput(lines, accessed, item.provenance)
 
 
@@ -342,7 +356,7 @@ class QueueResearch(Tool):
 
     async def run(self, args: Mapping[str, Any], prepared: Prepared, decision: Decision, rc: RequestCtx) -> ToolOutput:
         task = await self._queue.enqueue(args["question"], unattended=rc.context is Context.UNATTENDED)
-        return text_output(f"queued research task {task.task_id}")
+        return text_output(gen("queued research task {task_id}", task_id=task.task_id))
 
 
 # --- propose ---------------------------------------------------------------------------------------
@@ -379,8 +393,14 @@ class ProposeAction(Tool):
         warnings = ", ".join(w.value for w in action.warnings) or "none"
         flag = "tainted" if action.provenance.tainted else "trusted"
         return text_output(
-            f"action {action.action_id} ({action.kind}) is pending the user's approval in the HUD; "
-            f"provenance: {flag}; warnings: {warnings}. It has not been sent."
+            gen(
+                "action {action_id} ({kind}) is pending the user's approval in the HUD; "
+                "provenance: {flag}; warnings: {warnings}. It has not been sent.",
+                action_id=action.action_id,
+                kind=action.kind,
+                flag=flag,
+                warnings=warnings,
+            )
         )
 
 

@@ -9,6 +9,7 @@ import ast
 import copy
 import json
 import pickle
+import sys
 from pathlib import Path
 
 import pytest
@@ -149,7 +150,7 @@ def test_a_var_ref_renders_as_name_and_trusted_description_only() -> None:
     ctx.add_user(TrustedText("summarize"))
     ctx.add_tool_result("c1", [TrustedText("summary: "), ref])
     rendered = "\n".join(m.content for m in ctx.render())
-    assert "$SUMMARY_1 [tainted reader summary, 57 bytes, from email gmail:msg/abc]" in rendered
+    assert "$SUMMARY_1 [tainted reader summary, under 1 KB, from email gmail:msg/abc]" in rendered
     assert "attacker" not in rendered
 
 
@@ -159,7 +160,20 @@ def test_render_refuses_a_prompt_that_contains_tainted_text_even_if_smuggled_in(
     value = tainted()
     s.bind_text("SUMMARY", value, "summary")
     ctx = PlannerContext(TrustedText("system"), s)
-    ctx.add_tool_result("c1", [TrustedText("result: " + value._reveal().upper())])  # case and spacing don't help
+    # Case and spacing don't help: the result is withheld and replaced by a fixed refusal.
+    assert ctx.add_tool_result("c1", [TrustedText("result: " + value._reveal().upper())]) is False
+    rendered = "\n".join(m.content for m in ctx.render())
+    assert "tool result withheld: TAINT_LEAK" in rendered and "attacker" not in rendered
+
+
+def test_render_still_refuses_a_tool_entry_that_bypassed_add_tool_result() -> None:
+    s = store()
+    value = tainted()
+    s.bind_text("SUMMARY", value, "summary")
+    ctx = PlannerContext(TrustedText("system"), s)
+    ctx.add_tool_result("c1", [TrustedText("fine")])
+    entry = ctx._entries[-1]
+    ctx._entries[-1] = type(entry)(entry.role, (TrustedText(value._reveal()),), (), "c1")
     with pytest.raises(TaintLeak):
         ctx.render()
 
@@ -171,9 +185,7 @@ def test_render_catches_raw_item_text_and_metadata() -> None:
     s.bind_item("EMAIL", item, "email")
     for leaked in (body[700:760], "A subject line long enough"):
         ctx = PlannerContext(TrustedText("system"), s)
-        ctx.add_tool_result("c1", [TrustedText(leaked)])
-        with pytest.raises(TaintLeak):
-            ctx.render()
+        assert ctx.add_tool_result("c1", [TrustedText(leaked)]) is False
 
 
 def test_render_catches_tainted_text_in_model_tool_call_arguments() -> None:
@@ -244,19 +256,71 @@ REVEAL_ALLOWED = {
         "atlas/memory/store.py",  # persisting tainted memory, tainted
     },
     "_raw_bytes": {"atlas/core/taint.py", "atlas/core/reader.py"},
+    # The name-mangled slots behind them: only taint.py itself (review, taint pinning).
+    "_TaintedStr__value": {"atlas/core/taint.py"},
+    "_UntrustedContent__raw": {"atlas/core/taint.py"},
 }
 
 
 def _calls(attr: str) -> set[str]:
+    """Modules that name ``attr``: as an attribute, as a called name, or as a string (``getattr(x, "_reveal")``)."""
     found = set()
     for path in ATLAS.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr == attr:
-                found.add(str(path.relative_to(ATLAS.parent)))
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == attr:
+            if (
+                (isinstance(node, ast.Attribute) and node.attr == attr)
+                or (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == attr)
+                or (isinstance(node, ast.Constant) and isinstance(node.value, str) and attr in node.value)
+            ):
                 found.add(str(path.relative_to(ATLAS.parent)))
     return found
+
+
+def test_the_pinning_scan_sees_indirect_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The AST rule itself catches getattr-by-string and name-mangled access."""
+    fake = tmp_path / "atlas"
+    (fake / "core").mkdir(parents=True)
+    (fake / "core" / "sneaky.py").write_text(
+        "def a(v): return getattr(v, '_reveal')()\ndef b(v): return v._TaintedStr__value\n"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "ATLAS", fake)
+    assert _calls("_reveal") == {"atlas/core/sneaky.py"}
+    assert _calls("_TaintedStr__value") == {"atlas/core/sneaky.py"}
+
+
+def test_atlas_text_is_built_only_from_literal_templates() -> None:
+    """AtlasText is never leak-scanned (review F2), so it must only ever hold ATLAS's own templates."""
+    problems = []
+    for path in ATLAS.rglob("*.py"):
+        rel = str(path.relative_to(ATLAS.parent))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported = {
+            a.asname or a.name
+            for n in ast.walk(tree)
+            if isinstance(n, ast.ImportFrom) and n.module == "atlas.core.prompt"
+            for a in n.names
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            name = node.func.id
+            if name == "AtlasText" and rel != "atlas/core/prompt.py":
+                problems.append(f"{rel}: AtlasText() outside prompt.py")
+            if name in ("t", "gen") and name in imported:
+                first = node.args[0] if node.args else None
+                if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+                    problems.append(f"{rel}:{node.lineno}: {name}() needs a string literal")
+    assert problems == []
+
+
+def test_gen_refuses_values_that_could_carry_text() -> None:
+    from atlas.core.prompt import gen
+
+    assert gen("{a} {b} {c}", a=3, b=True, c="gmail:msg/1").text == "3 true gmail:msg/1"
+    for bad in (tainted(), "x" * 129, "line\nbreak", "$SUMMARY_1 ‮", 1.5, None):
+        with pytest.raises(TypeError):
+            gen("{v}", v=bad)
 
 
 @pytest.mark.parametrize("attr", sorted(REVEAL_ALLOWED))

@@ -25,8 +25,9 @@ from __future__ import annotations
 import hashlib
 import itertools
 import re
-from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, field
+from collections import Counter
+from collections.abc import Callable, Collection, Iterable, Iterator
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final, NoReturn, final
 
@@ -58,9 +59,23 @@ class SourceKind(StrEnum):
 
 TRUSTED_SOURCE_KINDS: Final = frozenset({SourceKind.USER, SourceKind.SYSTEM})
 
-# Audit DataRef.resource_id is ``^[a-z][a-z0-9_]*:[^\s]{1,300}$`` and events SourceRef.ref is at most 200
-# characters; ATLAS-generated IDs use this stricter subset so they are safe to show the planner.
-RESOURCE_ID_RE: Final = re.compile(r"[a-z][a-z0-9_]*:[A-Za-z0-9_.:/@+=-]{1,180}")
+# Resource IDs are shown to the planner, so they must not be a channel for attacker text (review F4): a
+# closed list of namespaces, then 1-64 characters of ``[A-Za-z0-9_-]`` segments separated by ``/``.
+# Integrations must use provider-assigned opaque IDs (Gmail message ID, Discord snowflakes, Calendar event
+# ID), never sender-chosen ones such as an email Message-ID or an ICS UID. This is a strict subset of
+# audit DataRef.resource_id and events SourceRef.ref.
+RESOURCE_NAMESPACES: Final = frozenset(
+    {"gmail", "gcal", "discord", "web", "memory", "utterance", "system", "portfolio"}
+)
+RESOURCE_ID_RE: Final = re.compile(r"([a-z]+):([A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*)")
+MAX_RESOURCE_PATH: Final = 64
+
+
+def valid_resource_id(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    match = RESOURCE_ID_RE.fullmatch(value)
+    return match is not None and match.group(1) in RESOURCE_NAMESPACES and len(match.group(2)) <= MAX_RESOURCE_PATH
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -74,8 +89,8 @@ class Source:
     def __post_init__(self) -> None:
         if not isinstance(self.kind, SourceKind):
             raise TypeError("Source.kind must be a SourceKind")
-        if RESOURCE_ID_RE.fullmatch(self.resource_id) is None:
-            raise ValueError("Source.resource_id must look like '<namespace>:<path>'")
+        if not valid_resource_id(self.resource_id):
+            raise ValueError("Source.resource_id must be '<known namespace>:<opaque path of at most 64 chars>'")
         if isinstance(self.observed_at_ms, bool) or not isinstance(self.observed_at_ms, int) or self.observed_at_ms < 0:
             raise ValueError("Source.observed_at_ms must be a non-negative integer")
 
@@ -321,56 +336,85 @@ def _normalize(text: str) -> str:
     return _WS_RE.sub(" ", text.casefold()).strip()
 
 
-@dataclass
 class TaintIndex:
-    """Fingerprints of every tainted value bound in a store, used to scan planner prompts.
+    """Fingerprints of the tainted values bound in a store, used to scan planner prompts.
 
-    Windows that occur in the trusted corpus (system prompt, tool descriptions) are never flagged, so
-    untrusted content cannot make the planner refuse to run by quoting its own instructions.
+    Fingerprints are kept per variable and reference-counted, so pruning a variable removes them
+    (review F2). Windows that occur in the trusted corpus (system prompt, tool descriptions) are never
+    flagged, so untrusted content cannot make the planner refuse to run by quoting its instructions.
     """
 
-    windows: set[int] = field(default_factory=set)
-    trusted: set[int] = field(default_factory=set)
+    def __init__(self) -> None:
+        self.counts: Counter[int] = Counter()
+        self.trusted: set[int] = set()
+        self._by_key: dict[str, frozenset[int]] = {}
+
+    @property
+    def windows(self) -> frozenset[int]:
+        return frozenset(self.counts)
 
     def add_trusted_corpus(self, text: str) -> None:
         norm = _normalize(text)
         self.trusted.update(hash(norm[i : i + LEAK_WINDOW]) for i in range(max(0, len(norm) - LEAK_WINDOW + 1)))
 
-    def add(self, text: str) -> None:
+    @staticmethod
+    def _fingerprints(text: str) -> set[int]:
         norm = _normalize(text[:RAW_INDEX_LIMIT])
         if len(norm) < LEAK_WINDOW:
-            if len(norm) >= 12:  # short values: index the whole value
-                self.windows.add(hash(norm))
-            return
+            return {hash(norm)} if len(norm) >= 12 else set()  # short values: the whole value
         stride = 1 if len(norm) <= SMALL_VALUE_LIMIT else RAW_STRIDE
-        for i in range(0, len(norm) - LEAK_WINDOW + 1, stride):
-            self.windows.add(hash(norm[i : i + LEAK_WINDOW]))
+        return {hash(norm[i : i + LEAK_WINDOW]) for i in range(0, len(norm) - LEAK_WINDOW + 1, stride)}
 
-    def _short_hit(self, norm: str) -> bool:
-        # Short tainted values (12..23 chars) are matched as whole substrings.
-        for size in range(12, LEAK_WINDOW):
-            for i in range(len(norm) - size + 1):
-                h = hash(norm[i : i + size])
-                if h in self.windows and h not in self.trusted:
-                    return True
-        return False
+    def add(self, key: str, text: str) -> None:
+        new = self._fingerprints(text) - self._by_key.get(key, frozenset())
+        self._by_key[key] = self._by_key.get(key, frozenset()) | new
+        self.counts.update(new)
+
+    def remove(self, key: str) -> None:
+        for h in self._by_key.pop(key, frozenset()):
+            self.counts[h] -= 1
+            if self.counts[h] <= 0:
+                del self.counts[h]
+
+    def _hit(self, h: int) -> bool:
+        return h in self.counts and h not in self.trusted
 
     def contains(self, text: str) -> bool:
+        if not self.counts:
+            return False
         norm = _normalize(text)
-        for i in range(len(norm) - LEAK_WINDOW + 1):
-            h = hash(norm[i : i + LEAK_WINDOW])
-            if h in self.windows and h not in self.trusted:
-                return True
-        return self._short_hit(norm)
+        if any(self._hit(hash(norm[i : i + LEAK_WINDOW])) for i in range(len(norm) - LEAK_WINDOW + 1)):
+            return True
+        # Short tainted values (12..23 chars) are matched as whole substrings.
+        return any(
+            self._hit(hash(norm[i : i + size])) for size in range(12, LEAK_WINDOW) for i in range(len(norm) - size + 1)
+        )
+
+
+def size_bucket(n: int) -> str:
+    """Sizes shown to the planner are bucketed, so exact lengths can't carry data (review, covert channels)."""
+    for limit, label in ((1024, "under 1 KB"), (4096, "1-4 KB"), (16384, "4-16 KB"), (65536, "16-64 KB")):
+        if n < limit:
+            return label
+    return "over 64 KB"
+
+
+DEFAULT_VARIABLE_TTL_MS: Final = 6 * 3600 * 1000
 
 
 class VariableStore:
-    """Binds tainted values to ``$VAR`` names for one session. Never hands content to the planner."""
+    """Binds tainted values to ``$VAR`` names for one session. Never hands content to the planner.
+
+    Bounded (review F8): at ``MAX_VARIABLES`` the oldest variable is evicted instead of failing, and
+    ``prune`` drops variables older than the TTL and items the index no longer holds, together with
+    their fingerprints. Names are never reused, so an evicted name stays undefined.
+    """
 
     MAX_VARIABLES: Final = 4096
 
-    def __init__(self, clock_ms: Callable[[], int]) -> None:
+    def __init__(self, clock_ms: Callable[[], int], *, ttl_ms: int = DEFAULT_VARIABLE_TTL_MS) -> None:
         self._clock = clock_ms
+        self._ttl = ttl_ms
         self._vars: dict[str, Variable] = {}
         self._counters: dict[str, Iterator[int]] = {}
         self._items_by_resource: dict[str, VarRef] = {}
@@ -382,17 +426,42 @@ class VariableStore:
     def _next(self, prefix: str) -> VarRef:
         if _PREFIX_RE.fullmatch(prefix) is None:
             raise ValueError("variable prefix must be 1-16 upper-case letters")
-        if len(self._vars) >= self.MAX_VARIABLES:
-            raise OverflowError("too many variables in this session")
+        while len(self._vars) >= self.MAX_VARIABLES:
+            self._remove(next(iter(self._vars)))  # oldest first (insertion order)
         counter = self._counters.setdefault(prefix, itertools.count(1))
         return VarRef(f"${prefix}_{next(counter)}")
+
+    def _remove(self, name: str) -> None:
+        var = self._vars.pop(name, None)
+        if var is None:
+            return
+        self.index.remove(name)
+        if isinstance(var.value, UntrustedContent):
+            self._items_by_resource.pop(var.value.source.resource_id, None)
+
+    def prune(self, live_resources: Collection[str] | None = None) -> int:
+        """Drop expired variables, and item variables whose item is gone. Returns how many were dropped."""
+        cutoff = self._clock() - self._ttl
+        doomed = [
+            name
+            for name, var in self._vars.items()
+            if var.created_at_ms < cutoff
+            or (
+                live_resources is not None
+                and isinstance(var.value, UntrustedContent)
+                and var.value.source.resource_id not in live_resources
+            )
+        ]
+        for name in doomed:
+            self._remove(name)
+        return len(doomed)
 
     def bind_text(self, prefix: str, value: TaintedStr, label: str) -> VarRef:
         if not isinstance(value, TaintedStr):
             raise TypeError("only tainted text is bound; trusted text goes straight into the prompt")
         ref = self._next(prefix)
         self._vars[ref.name] = Variable(ref, value, label, self._clock())
-        self.index.add(value._reveal())
+        self.index.add(ref.name, value._reveal())
         return ref
 
     def bind_item(self, prefix: str, item: UntrustedContent, label: str) -> VarRef:
@@ -402,10 +471,10 @@ class VariableStore:
         ref = self._next(prefix)
         self._vars[ref.name] = Variable(ref, item, label, self._clock())
         self._items_by_resource[item.source.resource_id] = ref
-        self.index.add(item._raw_bytes().decode("utf-8", "replace"))
+        self.index.add(ref.name, item._raw_bytes().decode("utf-8", "replace"))
         for meta in (item.sender, item.subject):
             if meta is not None:
-                self.index.add(meta._reveal())
+                self.index.add(ref.name, meta._reveal())
         return ref
 
     def get(self, ref: VarRef | str) -> Variable:
@@ -419,11 +488,10 @@ class VariableStore:
         return self._vars.get(name)
 
     def describe(self, ref: VarRef) -> str:
-        """A trusted description of a variable: label, source kinds and IDs, size. Never content."""
+        """A trusted description of a variable: label, source kinds and IDs, size bucket. Never content."""
         var = self.get(ref)
         sources = var.provenance.tainted_sources()
         where = ", ".join(f"{s.kind.value} {s.resource_id}" for s in sources[:3])
         if len(sources) > 3:
             where += f" (+{len(sources) - 3} more)"
-        size = var.value.byte_len
-        return f"{ref.name} [tainted {var.label}, {size} bytes, from {where}]"
+        return f"{ref.name} [tainted {var.label}, {size_bucket(var.value.byte_len)}, from {where}]"

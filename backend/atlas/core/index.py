@@ -46,6 +46,12 @@ class ItemIndex:
         items.sort(key=lambda i: (i.source.observed_at_ms, i.source.resource_id), reverse=True)
         return items[:limit]
 
+    def remove(self, resource_id: str) -> None:
+        self._items.pop(resource_id, None)
+
+    def resource_ids(self) -> frozenset[str]:
+        return frozenset(self._items)
+
     def contact_name(self, item: UntrustedContent) -> str | None:
         """The configured contact name if the claimed sender address matches one exactly."""
         if item.sender is None or not self._contacts:
