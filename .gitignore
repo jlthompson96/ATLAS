@@ -57,3 +57,6 @@ bench/**/raw/
 # --- Claude Code: agent worktrees and local settings ---
 .claude/worktrees/
 .claude/settings.local.json
+
+# --- atlas-ui dev state (throwaway CA, keys, paired devices) ---
+.atlas-dev/

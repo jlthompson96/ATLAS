@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>ATLAS: pair this device</title>
+    <link rel="stylesheet" href="/pair.css" />
+  </head>
+  <body>
+    <main>
+      <h1>ATLAS</h1>
+      <p>Enter the pairing code shown on the kiosk or printed by <code>atlas-ui pair</code>.</p>
+      <form id="pair" autocomplete="off">
+        <label for="code">Pairing code</label>
+        <input id="code" name="code" inputmode="text" autocapitalize="characters" spellcheck="false" maxlength="12" required autofocus />
+        <button type="submit">Pair</button>
+      </form>
+      <p id="msg" role="status" aria-live="polite"></p>
+    </main>
+    <script src="/pair.js"></script>
+  </body>
+</html>
