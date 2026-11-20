@@ -49,7 +49,8 @@ probes:
     script: |
       #!/bin/bash
       set -eux -o pipefail
-      if ! timeout 30s bash -c "until command -v nft >/dev/null && command -v shellcheck >/dev/null; do sleep 3; done"; then
+      # nft is in /usr/sbin, which isn't on the probing user's PATH: test the files, not `command -v`.
+      if ! timeout 30s bash -c "until [ -x /usr/sbin/nft ] && [ -x /usr/bin/shellcheck ]; do sleep 3; done"; then
         echo >&2 "provisioning has not finished"
         exit 1
       fi

@@ -90,7 +90,13 @@ for lock in "$stage"/backend/requirements-*.lock; do
 done
 
 tarball="$work/$version.tar"
-tar -cf "$tarball" -C "$stage" .
+# macOS tar (bsdtar) would add AppleDouble `._*` entries and xattr headers (com.apple.provenance), which
+# atlas-release refuses as unexpected top-level entries. Found in the ARM64 VM, 2026-11-20.
+tar_opts=()
+if tar --version 2>/dev/null | grep -q bsdtar; then
+  tar_opts=(--no-xattrs --no-mac-metadata)
+fi
+COPYFILE_DISABLE=1 tar ${tar_opts[@]+"${tar_opts[@]}"} -cf "$tarball" -C "$stage" .
 sha="$(shasum -a 256 "$tarball" | cut -d' ' -f1)"
 log "release $version: $(du -h "$tarball" | cut -f1), sha256 $sha"
 

@@ -2,6 +2,30 @@
 
 Everything below was written and statically tested on the Mac (pytest structure tests, `bash -n`, `--dry-run`), but **not executed** on Linux. Tick each item in the ARM64 Debian VM first ([vm.md](vm.md)), then on the Pi, and note the result next to it. Nothing here is a benchmark: B10 and friends only count on the real card.
 
+## VM run 2026-11-20
+
+A disposable clone of the VM (`limactl clone atlas atlas-test`) was provisioned and deployed to like the Pi: `provision-pi.sh` (two passes, then an idempotent third), `gen-audit-keys.sh`, `deploy.sh` through Lima's SSH config, `atlas-release` install/activate/rollback. Site values: Lima's user network 192.168.5.0/24, gateway and DNS .2, `LAN_PREFIX6 = fd00::/8`. Lima's shell runs over vsock, so loading the default-deny ruleset doesn't cut it. Findings V1–V6 are in [known-issues.md](../known-issues.md).
+
+| Item | Result in the VM |
+|---|---|
+| `provision-pi.sh` real run | OK. Pass 1 stops at the site file, pass 2 loads the firewall and enables the units, and a re-run changes nothing. A stale edited site file with `2001:db8::` was refused (D3 works). |
+| `nft -f` ruleset loaded, then `nft -c` | OK. |
+| PT-1 (`pt1-egress-check.sh`, `CANARY_HOST=1.1.1.1`) | **Passed**, after V1 was worked around (resolved disabled, `resolv.conf` pointing at `LAN_DNS`). |
+| UDP 53 from a non-egress user | Blocked (dig times out; a raw send gets `EPERM`). |
+| Egress via the proxy, real hosts | `atlas-google` reaches `gmail.googleapis.com` via 3131, `atlas-discord` reaches `discord.com` via 3132. A host on another caller's list gets `NOT_ALLOWLISTED`; another caller's port is dropped by nft. |
+| Direct internet from any non-egress user | Blocked. |
+| `systemd-analyze verify` | Clean apart from the missing `ExecStart` modules of the later-phase templates. |
+| `systemd-analyze security` | `atlas-audit` 1.1, `atlas-egress` 1.4 (both "OK"). |
+| Socket units | `/run/atlas/audit.sock` is `atlas-audit:atlas-audit-clients 0660`. A non-member gets `EACCES`; `atlas-egress` gets the group through `SupplementaryGroups=` (seen in `/proc/<pid>/status`). |
+| `LoadCredentialEncrypted` (host key, no TPM) | Works. Before `gen-audit-keys.sh` the service fails at step CREDENTIALS, as expected. |
+| `CAP_LINUX_IMMUTABLE` with `NoNewPrivileges=yes`; `chattr` under `SystemCallFilter=@system-service`; `MemoryDenyWriteExecute=yes` with `cryptography` | All work: the active segment and `checkpoints.jsonl` show `a`, and root's `echo >` into the segment gets `Operation not permitted`. |
+| `verify` with `--pubkey` | `UNANCHORED`, all checkpoints verified, genesis printed (G1). |
+| N4 clean stop | `systemctl stop atlas-audit` returns in 0.03 s and writes its stop records. Asyncio logs a harmless unlink error (V4). |
+| Release install, activate, rollback, list | Work. The first deploy was refused because of macOS tar metadata (V2, fixed). `activate` doesn't catch a crash-looping unit (V5). |
+| FI-3 (power cut) | **3 hard VM stops** (`limactl stop -f`) under `fi3-audit-load.sh`. Every boot: audit active, the chain verifies, no warnings, no `OUTCOME_UNKNOWN`, no fsynced record lost. The full test is 20 cuts on the Pi's card. |
+
+Not done in the VM: segment rotation and sealing (`+i`, needs a day or size rollover), purge on real ext4, the IPv6 checks (the VM network has no IPv6), WireGuard and the D1 mark, and the MDWE measurements for services that don't exist yet.
+
 ## Firewall (PT-1)
 
 - [ ] `nft -c -f /etc/atlas/atlas.nft` accepts the ruleset (it was **not** run on the Mac: nftables is not installed). **VM 2026-11-20: OK** with `site.nft.example` and the ATLAS users created (docs/runbooks/vm.md); Pi still to do. Syntax risks to look at first (each was written from documentation, never loaded): `priority filter`; quoted `skuid` names (`meta skuid "atlas-egress"`, `meta skuid != "atlas-egress"`; the users must exist, and `$NTP_USER` is a quoted string defined in the site file); variables inside anonymous sets (`ip daddr { $LAN_BROADCAST, 255.255.255.255 }`); `limit rate 5/minute log prefix ...`; `meta mark $WG_FWMARK` (hex define); `meta l4proto { tcp, udp } th dport 53`; the `include` of the site file; interval sets; `icmpv6 type nd-router-advert ip6 saddr $LAN_ROUTER6`.
