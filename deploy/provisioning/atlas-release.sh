@@ -22,7 +22,10 @@
 #    --index-url or --find-links), and wheels install with --require-hashes --no-index --only-binary;
 #  - python and pip run as an unprivileged throwaway user (systemd-run DynamicUser, no network) with `python -I` and
 #    `pip --isolated`; the result is copied in, chowned to root, stripped of setuid/setgid bits and made read-only;
-#  - arguments are validated with strict patterns because they arrive through sudo.
+#  - arguments are validated with strict patterns because they arrive through sudo;
+#  - (review N5) incoming/ is admin-writable, so the uploaded file is first copied (size-bounded) into a root-only work
+#    directory under releases/, and the checksum, the entry checks and the extraction all read that copy; the top-level
+#    allowlist is checked again on the extracted tree; every failure path removes the work and build-input directories.
 # No network access is needed or used: Python dependencies come from wheels shipped in the tarball.
 set -euo pipefail
 
@@ -34,6 +37,13 @@ SERVICE_RE='^atlas-[a-z]+$'
 CONF=/etc/atlas/services.conf
 ALLOWED_TOP="backend contracts deploy wheels"
 BUILD_STATE=/var/lib/atlas-build
+BUILD_PRIVATE=/var/lib/private/atlas-build # where DynamicUser= really keeps BUILD_STATE
+MAX_TARBALL_BYTES=$((512 * 1024 * 1024))   # a release is a few MB; bounds the copy out of incoming/
+
+# What a failed install must not leave behind (review N5); removed by the EXIT trap that cmd_install sets.
+WORK=""     # root-only (0700) directory under releases/: the tarball copy and the extracted tree
+INPUTS=""   # world-readable build inputs for the unprivileged builder
+BUILDING="" # service whose venv is being built
 
 log() { printf '%s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -63,6 +73,27 @@ check_tar_entries() {
       *) die "unexpected top-level entry in tarball: $top (only: $ALLOWED_TOP)" ;;
     esac
   done < <(tar -tf "$tarball")
+}
+
+# check_tree_top TREE: re-check the top-level allowlist on what tar actually extracted (review N5), hidden names included.
+check_tree_top() {
+  local tree="$1" entry top
+  for entry in "$tree"/* "$tree"/.[!.]* "$tree"/..?*; do
+    if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
+      continue # an unmatched glob pattern
+    fi
+    top="${entry##*/}"
+    case " $ALLOWED_TOP " in
+      *" $top "*) ;;
+      *) die "unexpected top-level entry after extraction: $top (only: $ALLOWED_TOP)" ;;
+    esac
+  done
+}
+
+cleanup_install() {
+  if [ -n "$INPUTS" ]; then rm -rf "$INPUTS"; fi
+  if [ -n "$BUILDING" ]; then rm -rf "${BUILD_STATE:?}/$BUILDING" "${BUILD_PRIVATE:?}"; fi
+  if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
 }
 
 # validate_lock FILE: only pins and hashes. Anything else (pip option lines, URLs, markers) is refused.
@@ -143,6 +174,7 @@ restart_units() {
 build_venv() {
   local name="$1" lock="$2" wheels="$3" dest="$4"
   command -v systemd-run >/dev/null || die "systemd-run is required to build as an unprivileged user"
+  BUILDING="$name"
   rm -rf "${BUILD_STATE:?}/$name"
   # The single quotes are intended (SC2016): $STATE_DIRECTORY, $1 and $2 expand in the unprivileged inner shell.
   # shellcheck disable=SC2016
@@ -154,26 +186,37 @@ build_venv() {
         --require-hashes --only-binary=:all: --no-deps -r "$2"' sh "$wheels" "$lock" \
     || die "building the venv for $name failed"
   cp -a --no-preserve=ownership "$BUILD_STATE/$name/venv" "$dest"
-  rm -rf "${BUILD_STATE:?}/$name" /var/lib/private/atlas-build
+  rm -rf "${BUILD_STATE:?}/$name" "${BUILD_PRIVATE:?}"
+  BUILDING=""
 }
 
 cmd_install() {
   local version="${1:?version}" sha="${2:?sha256}"
   valid_version "$version"
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || die "bad sha256"
-  local tarball="$BASE/incoming/$version.tar" dest="$BASE/releases/$version" partial="$BASE/releases/.$version.partial"
-  if [ ! -f "$tarball" ] || [ -L "$tarball" ]; then
-    die "missing $tarball"
+  local incoming="$BASE/incoming/$version.tar" dest="$BASE/releases/$version" tarball partial size
+  if [ ! -f "$incoming" ] || [ -L "$incoming" ]; then
+    die "missing $incoming"
   fi
   [ ! -e "$dest" ] || die "release $version already exists"
+
+  # From here on, only a private copy is read (review N5): the admin could swap the file in incoming/ between steps.
+  trap cleanup_install EXIT
+  trap 'exit 1' HUP INT TERM
+  WORK="$(mktemp -d "$BASE/releases/.work.XXXXXX")" # 0700, root-owned, hidden from release_versions
+  tarball="$WORK/release.tar"
+  partial="$WORK/tree"
+  head -c "$((MAX_TARBALL_BYTES + 1))" <"$incoming" >"$tarball"
+  size="$(($(wc -c <"$tarball")))"
+  [ "$size" -le "$MAX_TARBALL_BYTES" ] || die "tarball is larger than $MAX_TARBALL_BYTES bytes"
   echo "$sha  $tarball" | sha256sum --check --status || die "sha256 mismatch: refusing to unpack"
 
   check_tar_entries "$tarball"
   python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else 1)' || die "python3 is not 3.13 (the locks are resolved for CPython 3.13)"
-  rm -rf "$partial"
   install -d -m 700 "$partial"
-  trap 'rm -rf "$partial"' EXIT
   tar -xf "$tarball" -C "$partial" --no-same-owner --no-same-permissions --no-overwrite-dir
+  rm -f "$tarball"
+  check_tree_top "$partial"
   if [ -n "$(find "$partial" \( -type l -o -type b -o -type c -o -type p -o -type s \) -print -quit)" ]; then
     die "tarball contains links or special files"
   fi
@@ -181,7 +224,7 @@ cmd_install() {
 
   # One venv per service, from the root-owned service list. Dependencies only from shipped, hash-checked wheels.
   install -d -m 700 "$partial/venv"
-  local name short lock inputs
+  local name short lock
   for name in $(service_names); do
     short="${name#atlas-}"
     lock="$partial/backend/requirements-$short.lock"
@@ -189,12 +232,13 @@ cmd_install() {
       validate_lock "$lock"
       [ -d "$partial/wheels/$short" ] || die "no wheels for $name"
       # The unprivileged builder must be able to read its inputs; the release tree itself stays 0700 root.
-      inputs="$(mktemp -d "$BASE/releases/.in.XXXXXX")"
-      cp -R "$partial/wheels/$short" "$inputs/wheels"
-      cp "$lock" "$inputs/lock"
-      chmod -R a+rX "$inputs"
-      build_venv "$name" "$inputs/lock" "$inputs/wheels" "$partial/venv/$name"
-      rm -rf "$inputs"
+      INPUTS="$(mktemp -d "$BASE/releases/.in.XXXXXX")"
+      cp -R "$partial/wheels/$short" "$INPUTS/wheels"
+      cp "$lock" "$INPUTS/lock"
+      chmod -R a+rX "$INPUTS"
+      build_venv "$name" "$INPUTS/lock" "$INPUTS/wheels" "$partial/venv/$name"
+      rm -rf "$INPUTS"
+      INPUTS=""
     else
       python3 -I -m venv --without-pip "$partial/venv/$name"
     fi
@@ -207,8 +251,10 @@ cmd_install() {
   chmod -R u=rwX,go=rX "$partial"
   [ -z "$(find "$partial" -perm /6000 -print -quit)" ] || die "setuid or setgid bit survived"
   mv "$partial" "$dest"
-  trap - EXIT
-  rm -f "$tarball"
+  rm -rf "$WORK"
+  WORK=""
+  trap - EXIT HUP INT TERM
+  rm -f "$incoming"
   log "installed $version"
 }
 
