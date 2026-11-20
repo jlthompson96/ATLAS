@@ -79,7 +79,7 @@ _PUNCT: Final = re.compile(r"[^a-z0-9' ]+")
 
 
 def normalize(text: str) -> str:
-    out = _PUNCT.sub(" ", text.lower().replace("’", "'"))
+    out = _PUNCT.sub(" ", text.lower().replace(chr(0x2019), "'"))
     out = " ".join(out.split()).replace("'", "")
     out = _LEAD.sub("", out)
     return _TAIL.sub("", out).strip()
@@ -152,6 +152,4 @@ class LocalResponder:
         answer = await (self._sleep() if self._sleep is not None else self._power.request_sleep(SleepReason.IDLE))
         if isinstance(answer, SleepAccepted):
             return "Putting the desktop to sleep."
-        if isinstance(answer, SleepRefused):
-            return "Not now: " + ", ".join(r.replace("_", " ") for r in answer.reasons) + "."
-        return "I can't do that right now."
+        return "Not now: " + ", ".join(r.replace("_", " ") for r in answer.reasons) + "."
