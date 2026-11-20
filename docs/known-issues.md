@@ -25,6 +25,7 @@ The reproduction scripts (`exp4.py`, `exp5.py`) lived in a session scratch direc
 | D2 | Low | Pi provisioning | `deploy/provisioning/provision-pi.sh` | A change to the site nftables file alone is neither validated nor reloaded. Only changes to `atlas.nft` trigger `nft -c` and the reload. | Treat both files as one ruleset: validate and reload if either changed. |
 | D3 | Low | Pi provisioning | `deploy/nftables/` site include; `provision-pi.sh` | Nothing forces the owner to replace the RFC 3849 placeholder `LAN_PREFIX6`, so the IPv6 LAN exclusion (F6) can silently stay a no-op. | `provision-pi.sh` refuses to continue while any `2001:db8::` placeholder remains, as it does for the IPv4 site file. |
 | D4 | Low | — | `deploy/nftables/atlas.nft` | A process that squats a proxy port (3131–3136) while `atlas-egress` is down can still stop it from binding: a denial of service, with no data exposure. `LAN_ROUTER6` is a spoofable link-local source, so it adds little. | Socket-activate the proxy listeners from systemd. |
+| S1 | Low | Pi provisioning (`test_shellcheck_if_available` fails in the VM) | `deploy/provisioning/atlas-release.sh`, `deploy.sh` | First shellcheck run (ARM64 VM, 2026-11-20). `atlas-release.sh`: `ls \| grep` at 242 and 256 (SC2010; breaks on odd file names in a root-run script), `A && B \|\| C` used as if/else at 54, 77, 147 (SC2015), single-quoted `$` at 134 (SC2016, check that it's intended). `deploy.sh`: unquoted command substitution at 59 (SC2046), SC2015 at 35. The test runs shellcheck without `-x`, so the `lib.sh` source is only an info note (SC1091). | Replace `ls \| grep` with globs, rewrite the `&& \|\|` chains as `if`, quote line 59, and run shellcheck with `-x`. `atlas-release.sh` runs as root through sudoers, so this fix is the security-relevant part. |
 
 ### Accepted (no fix planned)
 
@@ -43,9 +44,10 @@ The reproduction scripts (`exp4.py`, `exp5.py`) lived in a session scratch direc
 
 These are not bugs, just unverified. The full list is `docs/runbooks/pi-verification.md`.
 
-- **nftables syntax.** Run `nft -c` on the rules: quoted skuid names, variables in anonymous sets, `limit … log`, `meta mark`, `th dport`, and the SYN-ACK behaviour of the proxy sport rule.
+- **nftables behaviour.** Load the rules and check the SYN-ACK behaviour of the proxy sport rule, `meta mark`, and the PT-1 script.
 - **Release build.** GNU tar link and setuid handling. The `systemd-run -p DynamicUser=yes` venv build on the read-only-overlay root (`/var/lib/atlas-build` lands in RAM).
-- **Python 3.13.** N1, N4 and F4, plus all tests, on Python 3.13. The Mac only has 3.15.
+- **Python 3.13.** Done 2026-11-20 in the VM: the full suite passes on 3.13.5 (including the N1, N4 and F4 tests), except S1. mypy on Linux needed one fix (`audit/peercred.py`). The Pi locks reproduce in the VM. N1 and N4 are still open bugs; only the Python version question is settled.
+- **nftables syntax.** `nft -c` passes in the VM (2026-11-20) with the example site file. Loading the rules and checking that they block traffic is still to do.
 
 ## Closed
 

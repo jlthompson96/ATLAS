@@ -1,0 +1,56 @@
+# Lima config for the ARM64 Debian 13 VM that stands in for the Pi (PLAN.md §7.0, Development environment).
+# Runbook: docs/runbooks/vm.md.  Start: limactl start --name=atlas deploy/vm/atlas-vm.yaml
+#
+# Debian 13 (trixie) because current 64-bit Raspberry Pi OS is trixie-based and ships Python 3.13 (CLAUDE.md).
+# Real kernel and systemd (Apple Virtualization.framework), so nftables, systemd-creds, chattr +a and unit
+# sandboxing behave as on Linux. This is not the Pi: no microSD, no read-only overlay, different kernel
+# config. Final checks still happen on the Pi (docs/runbooks/pi-verification.md).
+
+minimumLimaVersion: 2.0.0
+vmType: vz
+arch: aarch64
+cpus: 4
+memory: 4GiB
+disk: 20GiB
+
+# Pinned image: Lima verifies the digest after download. To update, take location + digest from
+# $(brew --prefix lima)/share/lima/templates/_images/debian-13.yaml (aarch64, genericcloud) in its own commit.
+images:
+  - location: "https://cloud.debian.org/images/cloud/trixie/20261103-2651/debian-13-genericcloud-arm64-20261103-2651.qcow2"
+    arch: aarch64
+    digest: "sha512:5d3ecec46fd29605db4084388a1e2eb82fd19a80202898f962840ea73793261de721e505e3877c829ae86c37fdd2f6c205b0b3b1337a89d0d4b98d9081adc0c2"
+
+# No mounts here. Lima's default would mount the whole home directory (~/.ssh included). deploy/vm/start.sh
+# adds exactly one: this repository, read-only, at /mnt/atlas. Its absolute path is local, so it isn't committed.
+# Work on a clone inside the VM (docs/runbooks/vm.md), never on the mount.
+mounts: []
+
+# Nothing else runs in the guest.
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      # python3 is 3.13 on trixie. nftables, e2fsprogs (chattr/lsattr) and systemd (systemd-creds) are the
+      # Pi-specific pieces under test; shellcheck runs the skipped test; the rest is for the checklist.
+      apt-get install -y --no-install-recommends \
+        python3 python3-venv git ca-certificates curl \
+        nftables e2fsprogs shellcheck \
+        dnsutils netcat-openbsd tar
+
+probes:
+  - description: "Python 3.13, nft and shellcheck installed"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if ! timeout 30s bash -c "until command -v nft >/dev/null && command -v shellcheck >/dev/null; do sleep 3; done"; then
+        echo >&2 "provisioning has not finished"
+        exit 1
+      fi
+      python3 -c 'import sys; assert sys.version_info[:2] == (3, 13), sys.version'
