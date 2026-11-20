@@ -1,11 +1,13 @@
 """``python -m atlas.audit``: ``serve`` (the service), ``verify``, ``outcome-unknown``, ``append`` (CLI stub).
 
-    python -m atlas.audit verify /var/lib/atlas/audit [--pubkey FILE] [--expect-head SEQ:HASH]
+    python -m atlas.audit verify /var/lib/atlas/audit [--pubkey FILE] [--expect-head SEQ:HASH] [--expect-genesis HASH]
     python -m atlas.audit outcome-unknown /var/lib/atlas/audit
     python -m atlas.audit serve                      # reads its configuration from the environment
     echo '{"kind":"system","context":"system","system":{"event":"service_start"}}' | python -m atlas.audit append
 
-Exit codes: 0 verified, 1 tampering or corruption detected, 2 usage or configuration error.
+Exit codes: 0 verified, 1 tampering or corruption detected, 2 usage or configuration error. A verified chain prints
+``OK:`` when an off-box ``--expect-head`` was checked, and ``UNANCHORED:`` (still exit 0) without one: then a rollback
+to an earlier genuine state, or a rewritten tail after the last checkpoint, cannot be ruled out.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import sys
 from pathlib import Path
@@ -22,7 +25,7 @@ from pathlib import Path
 from atlas.audit.attrs import LinuxChattr, NoAttributes, SegmentAttributes, probe_linux_chattr
 from atlas.audit.client import DEFAULT_SOCKET, AuditClient, AuditError
 from atlas.audit.keys import KeyFileError, load_private_key, load_public_key
-from atlas.audit.log import AuditConfig, AuditCorrupt, AuditLog
+from atlas.audit.log import AuditConfig, AuditCorrupt, AuditLog, AuditUnavailable
 from atlas.audit.peercred import KernelPeerCredentials, PasswdDirectory
 from atlas.audit.server import AuditServer, listen_fds_socket
 from atlas.audit.verify import verify_dir
@@ -46,7 +49,16 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             print("--expect-head must be SEQ:HASH", file=sys.stderr)
             return 2
         expect = (int(seq_text), hash_text)
-    report = verify_dir(Path(args.directory), public_key, expect)
+    if args.expect_genesis is not None and not re.fullmatch(r"[0-9a-f]{64}", args.expect_genesis):
+        print("--expect-genesis must be the 64-hex-digit hash of the genesis record", file=sys.stderr)
+        return 2
+    report = verify_dir(
+        Path(args.directory),
+        public_key,
+        expect,
+        expect_genesis=args.expect_genesis,
+        require_checkpoint=public_key is not None,  # G1: with a trusted key, an unsigned chain is a forged one
+    )
     for warning in report.warnings:
         print(f"warning: {warning}")
     for item in report.outcome_unknown:
@@ -56,10 +68,20 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     for error in report.errors:
         print(f"ERROR: {error}")
     if report.ok:
-        print(
-            f"OK: {report.records} records in {report.segments} segments, seq {report.first_seq}..{report.last_seq}, "
+        summary = (
+            f"{report.records} records in {report.segments} segments, seq {report.first_seq}..{report.last_seq}, "
             f"{report.checkpoints_verified} checkpoints verified, head {report.head_hash}"
         )
+        if report.genesis_hash is not None:
+            summary += f", genesis {report.genesis_hash}"
+        if report.anchored:
+            print(f"OK: {summary}")
+        else:
+            trust = "" if public_key is not None else "; key: checkpoint.pub next to the data, not an off-box copy"
+            print(
+                f"UNANCHORED: {summary}{trust}. No --expect-head: a rollback to an earlier genuine state, or a "
+                "rewritten tail after the last checkpoint, cannot be ruled out"
+            )
         return 0
     print("FAILED: audit chain is broken (AUDIT_CHAIN_BROKEN)")
     return 1
@@ -132,14 +154,25 @@ async def _serve() -> int:
     stopper = asyncio.create_task(stop.wait())
     failed = asyncio.create_task(server.fatal.wait())
     await asyncio.wait({stopper, failed}, return_when=asyncio.FIRST_COMPLETED)
-    await server.close()
-    if server.fatal.is_set() or audit_log.failed:
+    for task in (stopper, failed):
+        task.cancel()
+    healthy = not (server.fatal.is_set() or audit_log.failed)
+
+    def final_records() -> None:
+        audit_log.append_system("service_stop")
+        audit_log.checkpoint_if_needed()  # sign the tail so a clean stop leaves nothing unsigned
+
+    # The stop record and checkpoint are written BEFORE client connections are dropped and waited for (known issue
+    # N4): an idle pooled client must not hold shutdown past TimeoutStopSec into a SIGKILL.
+    try:
+        await server.close(on_stop=final_records if healthy else None)
+    except (AuditUnavailable, OSError):
+        healthy = False
+    if not healthy or audit_log.failed:
         # Poisoned by an I/O error: exit non-zero (systemd restarts us) and let startup re-validate the log.
         print("audit log failed; exiting so systemd restarts and re-validates it", file=sys.stderr)
         audit_log.close()
         return 1
-    audit_log.append_system("service_stop")
-    audit_log.checkpoint_if_needed()  # sign the tail so a clean stop leaves nothing unsigned
     audit_log.close()
     return 0
 
@@ -153,6 +186,10 @@ def main(argv: list[str] | None = None) -> int:
     p_verify.add_argument("directory")
     p_verify.add_argument("--pubkey", help="trusted checkpoint public key file (default: <directory>/checkpoint.pub)")
     p_verify.add_argument("--expect-head", help="off-box anchor SEQ:HASH; fails if the log is shorter or differs")
+    p_verify.add_argument(
+        "--expect-genesis",
+        help="off-box genesis record hash (recorded at provisioning); fails if the chain was replaced",
+    )
     p_unknown = sub.add_parser("outcome-unknown", help="list write_ahead records without a write_result")
     p_unknown.add_argument("directory")
     sub.add_parser("serve", help="run the service")

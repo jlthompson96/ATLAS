@@ -13,7 +13,8 @@ Security properties (each is covered by a test in tests/test_egress_proxy.py):
 6. Every decision is written to atlas-audit before any upstream byte is sent. If the audit
    service cannot take the record, the tunnel is closed (fail closed). Denials are audited too.
 7. Bounded everything: head size and count, one total deadline per phase, per-caller and global
-   connection limits, idle timeout while tunnelling.
+   connection limits, idle timeout while tunnelling, and a per-caller rate of tunnel opens (429) kept
+   well below the egress audit budget, so one caller cannot starve the others (known issue N3).
 
 Nothing in a log or an audit record contains request headers, bodies or payload bytes. Only the
 caller, the (sanitized) target host, port, decision, a stable reason/code and byte counts.
@@ -43,6 +44,7 @@ STATUS_TEXT: Final = {
     403: "Forbidden",
     405: "Method Not Allowed",
     408: "Request Timeout",
+    429: "Too Many Requests",
     431: "Request Header Fields Too Large",
     502: "Bad Gateway",
     503: "Service Unavailable",
@@ -69,6 +71,11 @@ class Limits:
     idle_timeout_s: float = 600.0  # Discord's gateway heartbeats every ~41 s, so 10 minutes is generous
     max_total: int = 64
     max_per_caller: int = 16
+    # CONNECT requests per caller (token bucket), refused with 429 beyond it (known issue N3). Each allowed tunnel costs
+    # two audit records, so a caller's sustained maximum is ~5 records/s (with denials) against atlas-egress's audit
+    # budget of 30/s (audit/server.py ACTOR_BUDGETS). Honest peaks (a SearXNG fan-out, a Gmail sync) fit in the burst.
+    open_burst: float = 30.0
+    open_rate_per_s: float = 2.0
     # Denial audit records are rate limited per caller (token bucket); what is suppressed is counted and written
     # as one aggregate record per caller and reason every ``suppress_flush_interval_s`` (review F5).
     denial_burst: float = 10.0
@@ -177,8 +184,11 @@ class EgressProxy:
         self._servers: list[asyncio.Server] = []
         self._tasks: set[asyncio.Task[Any]] = set()
         self._active: dict[str, int] = dict.fromkeys(config.callers, 0)
-        self._buckets: dict[str, tuple[float, float]] = {}  # caller -> (tokens, last refill)
-        self._suppressed: dict[tuple[str, str | None], int] = {}
+        self._buckets: dict[str, tuple[float, float]] = {}  # caller -> (tokens, last refill), audited denials
+        self._open_buckets: dict[str, tuple[float, float]] = {}  # caller -> (tokens, last refill), tunnel opens
+        # Records not written individually, per (caller, decision, block_reason): denials over the audit rate, and any
+        # best-effort record the audit service refused. Written as one aggregate each by flush_suppressed().
+        self._suppressed: dict[tuple[str, str, str | None], _Tally] = {}
         self._flusher: asyncio.Task[None] | None = None
         self.bound_ports: dict[str, int] = {}
 
@@ -272,6 +282,8 @@ class EgressProxy:
                     result="refused",
                 ) from None
             host, port = request.host, request.port
+            if not self._take_open_token(caller):
+                raise Denied("RATE_LIMITED", reason="limit", status=429, result="refused")
             self._check_policy(policy, request)
             addresses = await self._resolve_checked(request.host)
             await _reply_status(writer, 200, "Connection Established")
@@ -386,30 +398,60 @@ class EgressProxy:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _take_denial_token(self, caller: str) -> bool:
-        now = self._monotonic()
-        tokens, last = self._buckets.get(caller, (self._limits.denial_burst, now))
-        tokens = min(self._limits.denial_burst, tokens + (now - last) * self._limits.denial_rate_per_s)
-        allowed = tokens >= 1.0
-        self._buckets[caller] = (tokens - 1.0 if allowed else tokens, now)
-        return allowed
+        return _take_token(
+            self._buckets, caller, self._limits.denial_burst, self._limits.denial_rate_per_s, self._monotonic()
+        )
+
+    def _take_open_token(self, caller: str) -> bool:
+        return _take_token(
+            self._open_buckets, caller, self._limits.open_burst, self._limits.open_rate_per_s, self._monotonic()
+        )
 
     async def _audit_denial(self, caller: str, record: dict[str, Any]) -> None:
         """Audit a refusal unless this caller is flooding denials; then count it for the aggregate record."""
         if self._take_denial_token(caller):
             await self._audit_best_effort(record)
         else:
-            key = (caller, record["egress"].get("block_reason"))
-            self._suppressed[key] = self._suppressed.get(key, 0) + 1
+            self._count_unwritten(record)
+
+    def _count_unwritten(self, record: dict[str, Any]) -> None:
+        egress = record["egress"]
+        key = (str(egress["caller"]), str(egress["decision"]), egress.get("block_reason"))
+        tally = self._suppressed.setdefault(key, _Tally())
+        tally.add(1, int(egress.get("bytes_in", 0)), int(egress.get("bytes_out", 0)))
 
     async def flush_suppressed(self) -> None:
-        """Write one aggregate record per (caller, block_reason) for denials not audited individually."""
+        """Write one aggregate record per (caller, decision, block_reason) for records not written individually.
+
+        Denials over the rate become ``DENIALS_SUPPRESSED`` (decision blocked). Allowed-tunnel records the audit service
+        refused (a close record with its byte counts, an unreachable upstream) become ``AUDIT_RECORDS_LOST`` (decision
+        allowed) with the byte counts summed. An aggregate that cannot be written either stays pending for the next flush.
+        """
         pending, self._suppressed = self._suppressed, {}
-        for (caller, reason), count in sorted(pending.items(), key=lambda kv: (kv[0][0], kv[0][1] or "")):
-            record = egress_record(
-                caller, None, None, decision="blocked", status="refused", code="DENIALS_SUPPRESSED", reason=reason
-            )
-            record["egress"]["task_id"] = f"suppressed-{count}"  # audit-record.v1 has no count field (proposal filed)
-            await self._audit_best_effort(record)
+        for (caller, decision, reason), tally in sorted(
+            pending.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2] or "")
+        ):
+            if decision == "blocked":
+                record = egress_record(
+                    caller, None, None, decision="blocked", status="refused", code="DENIALS_SUPPRESSED", reason=reason
+                )
+            else:
+                record = egress_record(
+                    caller,
+                    None,
+                    None,
+                    decision="allowed",
+                    status="error",
+                    code="AUDIT_RECORDS_LOST",
+                    bytes_in=tally.bytes_in,
+                    bytes_out=tally.bytes_out,
+                )
+            record["egress"]["task_id"] = f"suppressed-{tally.count}"  # audit-record.v1 has no count field (proposal)
+            try:
+                await self._audit.append(record)
+            except AuditError as exc:
+                log.error("egress aggregate record not written yet (%s)", exc.code)
+                self._suppressed.setdefault((caller, decision, reason), _Tally()).merge(tally)
 
     async def _flush_loop(self) -> None:
         while True:
@@ -417,10 +459,38 @@ class EgressProxy:
             await self.flush_suppressed()
 
     async def _audit_best_effort(self, record: dict[str, Any]) -> None:
+        """Write a record whose loss must not stop anything; a refused one is counted in the next aggregate (N3)."""
         try:
             await self._audit.append(record)
         except AuditError as exc:
-            log.error("egress audit record lost (%s)", exc.code)
+            log.error("egress audit record not written (%s); counted in the next aggregate", exc.code)
+            self._count_unwritten(record)
+
+
+@dataclass
+class _Tally:
+    """Records folded into one aggregate: how many, and the byte counts they carried."""
+
+    count: int = 0
+    bytes_in: int = 0
+    bytes_out: int = 0
+
+    def add(self, count: int, bytes_in: int, bytes_out: int) -> None:
+        self.count += count
+        self.bytes_in += bytes_in
+        self.bytes_out += bytes_out
+
+    def merge(self, other: _Tally) -> None:
+        self.add(other.count, other.bytes_in, other.bytes_out)
+
+
+def _take_token(buckets: dict[str, tuple[float, float]], key: str, burst: float, rate: float, now: float) -> bool:
+    """Token bucket: refill at ``rate`` per second up to ``burst``, then take one token if there is one."""
+    tokens, last = buckets.get(key, (burst, now))
+    tokens = min(burst, tokens + (now - last) * rate)
+    allowed = tokens >= 1.0
+    buckets[key] = (tokens - 1.0 if allowed else tokens, now)
+    return allowed
 
 
 async def _pump(

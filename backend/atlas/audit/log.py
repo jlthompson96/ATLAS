@@ -157,6 +157,11 @@ class AuditLog:
             log._append_internal(
                 "genesis", {"genesis": {"chain_id": config.chain_id, "note": "chain created"}, "context": "system"}
             )
+        # Sign whatever is unsigned before appending anything (known issue N1): after an unclean stop (power cut,
+        # SIGKILL) the previous run's tail would otherwise wait for a cadence that restarts from zero. A fresh chain
+        # gets its genesis signed the same way (G1), so even a new log carries a signature the off-box key can check.
+        if log._head_seq > log._last_cp_record_seq:
+            log.checkpoint_now()
         return log
 
     def close(self) -> None:
@@ -432,6 +437,7 @@ class AuditLog:
             report = verify_dir(self._cfg.data_dir, self._key.public_key())
             if not report.ok:
                 raise AuditCorrupt(f"purged chain does not verify: {report.errors[0]}")
+            segments = self._finish_interrupted_purge(segments, report.purged_through)
         first_seq, path = segments[-1]
         lines, torn = read_lines(path)
         prev_hash: str | None = None
@@ -469,6 +475,22 @@ class AuditLog:
         self._cross_check_sidecar(records)
         self._repair_sidecar(records)
         self._last_sync = self._monotonic()
+
+    def _finish_interrupted_purge(
+        self, segments: list[tuple[int, Path]], purged_through: int
+    ) -> list[tuple[int, Path]]:
+        """Unlink the segments a verified, signed purge already destroyed on paper (known issue N2: a crash between
+        ``purge_segments``' unlinks). Only whole segments at or below ``purged_through``, never the last one, and only
+        on the strength of a purge that a signature-verified checkpoint covers (the caller verified the chain)."""
+        done = 0
+        while done < len(segments) - 1 and segments[done + 1][0] - 1 <= purged_through:
+            path = segments[done][1]
+            self._attrs.unseal(path)
+            path.unlink()
+            done += 1
+        if done:
+            self._fsync_dir(self._cfg.data_dir / SEGMENTS_DIR)
+        return segments[done:]
 
     def _set_aside(self, path: Path) -> None:
         self._attrs.unseal(path)

@@ -12,10 +12,17 @@ Trust rules (review F1). Nothing unsigned vouches for anything:
   to the purge record, and through it to ``anchor_hash``. ``purge_segments`` signs one immediately.)
 * An ``expect_head``, or a sidecar entry, that predates the surviving chain is an error unless such a
   covered purge accounts for that seq range.
+* The writer signs a checkpoint right after genesis (known issue G1), so with a trusted key
+  (``require_checkpoint``, the CLI's ``--pubkey``) a chain with no verified checkpoint is an error: it is a
+  fresh chain written without the key. ``expect_genesis`` (recorded off-box at provisioning) catches a
+  replaced chain even when the key next to it was replaced too. Neither catches a rollback to a genuine
+  prefix; only ``expect_head`` does, and a report without one is ``anchored == False``.
 * Records after the last verified checkpoint are counted and reported; more than ``max_unsigned_records``
-  of them, or more than ``max_unsigned_seconds`` (plus a grace) of timestamps, is an error because the
-  writer would have signed a checkpoint by then. Within those bounds they are the live tail, which an
-  attacker without an off-box anchor can still rewrite or drop (docs/runbooks/audit.md).
+  of them is an error because the writer would have signed a checkpoint by then. Within that bound they
+  are the live tail, which an attacker without an off-box anchor can still rewrite or drop
+  (docs/runbooks/audit.md). There is deliberately no wall-clock rule (known issue N1): ``ts`` is chosen
+  by whoever wrote the record, so it only ever constrained honest writers, and the writer's hourly timer
+  is monotonic and restarts with the process. The writer signs any unsigned tail when it starts instead.
 """
 
 from __future__ import annotations
@@ -38,8 +45,6 @@ from atlas.audit.segments import (
 )
 
 DEFAULT_MAX_UNSIGNED_RECORDS = 1000  # == the writer's default checkpoint_every
-DEFAULT_MAX_UNSIGNED_SECONDS = 3600  # == the writer's default checkpoint interval
-TIME_GRACE_SECONDS = 300  # the writer checks the clock on appends and on a 5 s timer
 
 
 @dataclass(frozen=True)
@@ -65,6 +70,9 @@ class VerifyReport:
     checkpoints_verified: int = 0
     records_after_last_checkpoint: int = 0
     outcome_unknown: list[OutcomeUnknown] = field(default_factory=list)
+    genesis_hash: str | None = None  # set when the chain still starts at seq 0
+    purged_through: int = -1  # highest to_seq of a purge covered by a verified checkpoint (-1: none)
+    anchored: bool = False  # an off-box expect_head was checked (truncation and rollback are covered)
 
     @property
     def ok(self) -> bool:
@@ -162,9 +170,10 @@ def verify_dir(
     expect_head: tuple[int, str] | None = None,
     *,
     max_unsigned_records: int = DEFAULT_MAX_UNSIGNED_RECORDS,
-    max_unsigned_seconds: int = DEFAULT_MAX_UNSIGNED_SECONDS,
+    expect_genesis: str | None = None,
+    require_checkpoint: bool = False,
 ) -> VerifyReport:
-    report = VerifyReport()
+    report = VerifyReport(anchored=expect_head is not None)
     if public_key is None:
         key_path = data_dir / PUBLIC_KEY_FILE
         try:
@@ -237,9 +246,16 @@ def verify_dir(
     covered = [p for p in purges if p["seq"] <= last_signed_to]  # a verified checkpoint commits to these
 
     first = records[0]
+    report.purged_through = max((p["purge"]["to_seq"] for p in covered), default=-1)
     if first["seq"] != 0:
+        # Anchored right after the purged range, or (known issue N2: a crash between the purge's unlinks) anywhere
+        # inside it, as long as the surviving record at to_seq is the one whose hash the signed purge anchors.
         anchored = any(
-            p["purge"]["to_seq"] + 1 == first["seq"] and p["purge"]["anchor_hash"] == first["prev_hash"]
+            (p["purge"]["to_seq"] + 1 == first["seq"] and p["purge"]["anchor_hash"] == first["prev_hash"])
+            or (
+                p["purge"]["from_seq"] <= first["seq"] <= p["purge"]["to_seq"]
+                and hashes.get(p["purge"]["to_seq"]) == p["purge"]["anchor_hash"]
+            )
             for p in covered
         )
         if not anchored:
@@ -249,20 +265,28 @@ def verify_dir(
             )
     elif first["prev_hash"] != ZERO_HASH:
         report.errors.append("genesis prev_hash is not 64 zeros")
+    else:
+        report.genesis_hash = first["hash"]
+    if expect_genesis is not None:
+        if first["seq"] != 0:
+            report.warnings.append(
+                "the genesis record has been purged: --expect-genesis is not checked directly; "
+                "the signed purge anchor stands in for it (use --pubkey)"
+            )
+        elif first["hash"] != expect_genesis:
+            report.errors.append("genesis record differs from the expected off-box genesis hash: log replaced")
+    if require_checkpoint and report.checkpoints_verified == 0:
+        report.errors.append(
+            "no checkpoint verifies with the trusted key: the writer signs one right after genesis, "
+            "so this chain was written without the key (forged or replaced log)"
+        )
 
-    _check_tail(report, records, last_cp_record, max_unsigned_records, max_unsigned_seconds)
-    _check_sidecar(
-        data_dir, report, chain_checkpoints, hashes, covered, records, max_unsigned_records, max_unsigned_seconds
-    )
+    _check_tail(report, records, last_cp_record, max_unsigned_records)
+    _check_sidecar(data_dir, report, chain_checkpoints, hashes, covered, records, max_unsigned_records)
     if expect_head is not None:
         _check_expected_head(report, expect_head, hashes, covered)
     report.outcome_unknown = find_outcome_unknown(records)
     return report
-
-
-def _span_seconds(records: list[dict[str, Any]], since: dict[str, Any] | None) -> float:
-    start = since["ts"] if since is not None else records[0]["ts"]
-    return float(records[-1]["ts"] - start) / 1000.0
 
 
 def _check_tail(
@@ -270,7 +294,6 @@ def _check_tail(
     records: list[dict[str, Any]],
     last_cp_record: dict[str, Any] | None,
     max_records: int,
-    max_seconds: int,
 ) -> None:
     after = (records[-1]["seq"] - last_cp_record["seq"]) if last_cp_record else len(records)
     report.records_after_last_checkpoint = after
@@ -278,8 +301,6 @@ def _check_tail(
         report.errors.append(
             f"{after} records after the last verified checkpoint (limit {max_records}): the writer would have signed one"
         )
-    elif after and _span_seconds(records, last_cp_record) > max_seconds + TIME_GRACE_SECONDS:
-        report.errors.append("more than an hour of records after the last verified checkpoint")
 
 
 def _covers(covered: list[dict[str, Any]], seq: int) -> dict[str, Any] | None:
@@ -317,11 +338,10 @@ def _check_sidecar(
     covered: list[dict[str, Any]],
     records: list[dict[str, Any]],
     max_records: int,
-    max_seconds: int,
 ) -> None:
     sidecar = _read_sidecar(data_dir, report)
     if not sidecar:
-        long_chain = len(records) > max_records or _span_seconds(records, None) > max_seconds
+        long_chain = len(records) > max_records
         if chain_checkpoints and (sidecar is None or len(chain_checkpoints) > 1):
             report.errors.append(f"{CHECKPOINT_SIDECAR} is missing or empty")
         elif long_chain:

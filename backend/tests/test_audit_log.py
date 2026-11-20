@@ -60,8 +60,8 @@ def test_append_and_verify(make_log: MakeLog) -> None:
     log.close()
     report = verify(log)
     assert report.ok, report.errors
-    assert report.records == 9  # genesis + 8
-    assert (report.first_seq, report.last_seq) == (0, 8)
+    assert report.records == 10  # genesis, its checkpoint (G1), 8 appended
+    assert (report.first_seq, report.last_seq) == (0, 9)
     assert report.outcome_unknown == []
 
 
@@ -102,12 +102,12 @@ def test_reopen_continues_the_chain(make_log: MakeLog) -> None:
     fill(log, 3)
     log.close()
     again = make_log()
-    assert again.head[0] == 3
+    assert again.head[0] == 5  # genesis, its checkpoint, 3 records, and the checkpoint open() signs over them (N1)
     fill(again, 2, start=3)
     again.close()
     report = verify(again)
     assert report.ok, report.errors
-    assert report.last_seq == 5
+    assert report.last_seq == 7
 
 
 # --- durability and the write budget ---------------------------------------------------------------------
@@ -196,12 +196,12 @@ def test_torn_tail_is_ignored_and_the_chain_continues_in_a_new_segment(make_log:
     assert report.ok
     assert any("torn" in w for w in report.warnings)
     revived = make_log()
-    assert revived.head[0] == 4
+    assert revived.head[0] == 6  # seq 0..5 survived, then open() signed them (N1)
     fill(revived, 2, start=4)
     revived.close()
     final = verify(revived)
     assert final.ok, final.errors
-    assert final.last_seq == 6
+    assert final.last_seq == 8
     assert len(list_segments(revived.data_dir)) == 2
 
 
@@ -370,7 +370,7 @@ def test_garbage_and_duplicate_keys_are_rejected(chain: AuditLog) -> None:
 def test_checkpoint_cadence_by_count_and_by_time(make_log: MakeLog, clock: Clock) -> None:
     log = make_log(checkpoint_every=5, checkpoint_interval_s=3600)
     fill(log, 12)
-    assert verify(log).checkpoints_verified == 2
+    assert verify(log).checkpoints_verified == 3  # genesis, then every 5 records
     before = verify(log).checkpoints_verified
     clock.advance(3601)
     log.tick()
@@ -395,7 +395,7 @@ def test_daily_rotation_keeps_seq_gap_free(make_log: MakeLog, clock: Clock) -> N
     report = verify(log)
     assert report.ok, report.errors
     assert report.last_seq == 8 + report.checkpoints_verified  # hourly checkpoints fire across the day gaps
-    assert report.checkpoints_verified == 2
+    assert report.checkpoints_verified == 3  # genesis and two day gaps
 
 
 def test_size_rotation(make_log: MakeLog) -> None:
@@ -501,7 +501,7 @@ def test_purged_anchor_must_match(make_log: MakeLog, clock: Clock) -> None:
 
 def test_cli_verify_exit_codes(chain: AuditLog, capsys: pytest.CaptureFixture[str]) -> None:
     assert audit_cli(["verify", str(chain.data_dir)]) == 0
-    assert "OK:" in capsys.readouterr().out
+    assert "UNANCHORED:" in capsys.readouterr().out  # verified, but no off-box --expect-head (G1)
     path = only_segment(chain)
     records = segment_lines(path)
     records[2]["context"] = "unattended"

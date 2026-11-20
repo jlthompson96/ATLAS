@@ -4,8 +4,9 @@
 #
 #   sudo -u atlas-audit /var/lib/atlas/current/venv/atlas-audit/bin/python -m atlas.audit verify /var/lib/atlas/audit
 #
-# Expected after every cut: the chain verifies (at most ~30 s of read-event records lost, nothing corrupt), any torn final
-# line is reported as a warning, and every write_ahead without a write_result is listed as OUTCOME_UNKNOWN (never retried).
+# Expected after every cut: the chain verifies (exit 0, `UNANCHORED:` because no off-box --expect-head is given on the box;
+# at most ~30 s of read-event records lost, nothing corrupt), any torn final line is reported as a warning, and every
+# write_ahead without a write_result is listed as OUTCOME_UNKNOWN (never retried).
 #
 #   sudo deploy/provisioning/fi3-audit-load.sh [iterations]      (runs until power is cut or iterations are done)
 #

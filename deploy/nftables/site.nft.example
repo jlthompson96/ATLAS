@@ -10,6 +10,7 @@ define ADMIN_IP = 192.0.2.10            # the development Mac: the only device a
 define DESKTOP_LAN_IP = 192.0.2.20      # the LLM desktop's LAN address (WireGuard endpoint, UDP 51820)
 define DESKTOP_WG_IP = 10.77.0.2        # the desktop inside the tunnel (contracts/services.md section 2)
 define LAN_PREFIX6 = 2001:db8:1234:5600::/64   # the LAN's global IPv6 prefix (RFC 3849 placeholder): never an internet destination
+#   provision-pi.sh refuses to load the firewall while a 2001:db8:: placeholder remains; no IPv6 on the LAN: use fd00::/8
 define LAN_ROUTER6 = fe80::1            # the router's link-local address: the only accepted source of IPv6 router advertisements
 define NTP_USER = "systemd-timesync"    # the user of your time-sync daemon ("_chrony" for chrony); it must exist when the rules load
-define WG_FWMARK = 0x5182               # set `FwMark = 0x5182` in the wg0 config so the tunnel's own packets are identifiable
+define WG_FWMARK = 0x5182               # set `FirewallMark=0x5182` in wg0.netdev ([WireGuard]) so the tunnel's packets are identifiable

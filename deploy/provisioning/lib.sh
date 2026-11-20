@@ -86,6 +86,61 @@ write_file() {
   rm -f "$tmp"
 }
 
+# has_ipv6_placeholder FILE: true if any non-comment text still holds the RFC 3849 documentation prefix 2001:db8::/32
+# (FILE may be - for stdin). Left in place, the IPv6 LAN exclusion (review F6) is silently a no-op (known issue D3).
+has_ipv6_placeholder() {
+  grep -qiE '^[^#]*2001:0{0,2}db8:' "$1"
+}
+
+# install_firewall ETC SRC: install, validate and (re)load the ATLAS nftables ruleset. ETC is /etc/atlas on the Pi; SRC is
+# this repository's deploy/nftables. The ruleset is atlas.nft PLUS the owner's site file ETC/nftables-site.nft, so a
+# change to EITHER is validated with `nft -c` before it replaces anything, then reloaded (known issue D2). The site file
+# that was last loaded is kept as nftables-site.nft.applied to detect edits; the previous one as nftables-site.nft.prev.
+install_firewall() {
+  local etc="$1" src="$2"
+  local site="$etc/nftables-site.nft" applied="$etc/nftables-site.nft.applied" nft_changed=0 site_changed=0
+  if [ ! -f "$site" ]; then
+    log "create  $site from the placeholder example: EDIT IT, then re-run"
+    run install -m 640 -o root -g root "$src/site.nft.example" "$site"
+  fi
+  if [ "$DRY_RUN" != "1" ] && cmp -s "$site" "$src/site.nft.example"; then
+    log "WARNING: $site still holds the placeholder addresses; the firewall is NOT loaded or enabled yet."
+    install_file "$src/atlas.nft" "$etc/atlas.nft" 644
+    return 0
+  fi
+  if [ "$DRY_RUN" != "1" ] && has_ipv6_placeholder "$site"; then
+    die "$site still holds the RFC 3849 placeholder 2001:db8:: (LAN_PREFIX6): set your LAN's global IPv6 prefix, or fd00::/8 if the LAN has none (docs/runbooks/provisioning.md)"
+  fi
+  if [ -f "$etc/atlas.nft" ] && ! cmp -s "$src/atlas.nft" "$etc/atlas.nft"; then
+    nft_changed=1
+  fi
+  if [ ! -f "$applied" ] || ! cmp -s "$site" "$applied"; then
+    site_changed=1
+  fi
+  if [ ! -f "$etc/atlas.nft" ] || [ "$nft_changed" = "1" ] || [ "$site_changed" = "1" ]; then
+    # A bad file must never be what the next boot loads: validate the candidate (with the current site file) first,
+    # keep the last known-good copies for rollback, then replace (review F8).
+    run install -m 644 -o root -g root "$src/atlas.nft" "$etc/atlas.nft.new"
+    run nft -c -f "$etc/atlas.nft.new"
+    if [ "$nft_changed" = "1" ]; then
+      run cp -p "$etc/atlas.nft" "$etc/atlas.nft.prev"
+    fi
+    if [ "$site_changed" = "1" ] && [ -f "$applied" ]; then
+      run cp -p "$applied" "$etc/nftables-site.nft.prev"
+    fi
+    run mv -f "$etc/atlas.nft.new" "$etc/atlas.nft"
+  else
+    log "ok      $etc/atlas.nft and $site"
+  fi
+  run nft -c -f "$etc/atlas.nft"
+  run systemctl enable --now nftables.service
+  if [ "$nft_changed" = "1" ] || [ "$site_changed" = "1" ]; then
+    log "ruleset changed: reloading nftables (previous kept as atlas.nft.prev and nftables-site.nft.prev)"
+    run systemctl reload nftables.service
+    run install -m 640 -o root -g root "$site" "$applied"
+  fi
+}
+
 # service_list FILE: names of the Pi services in services.conf (comments and blanks skipped).
 service_list() {
   awk '!/^[[:space:]]*(#|$)/ { print $1 }' "$1"

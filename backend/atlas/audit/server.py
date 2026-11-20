@@ -22,9 +22,10 @@ import os
 import socket
 import stat
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final
 
 from atlas.audit.log import AuditLog, AuditUnavailable, SubmissionRejected, load_body
@@ -42,6 +43,12 @@ MAX_CONNECTIONS_PER_ACTOR: Final = 8  # one service must not use up the global l
 # watch; the free-space floor in AuditLog.append stops it before the card fills.
 APPEND_RATE_PER_S: Final = 5.0
 APPEND_BURST: Final = 50.0
+# atlas-egress writes on behalf of every proxy caller (two records per allowed tunnel, plus denials), so it gets a larger
+# budget (known issue N3). The proxy limits each caller well below it (egress Limits: 2 tunnel opens/s, burst 30, and
+# 1 audited denial/s, burst 10, i.e. at most ~5 records/s per caller sustained), so one caller cannot use up what the
+# others need. Six callers at their sustained maximum together stay within 30/s.
+ACTOR_BUDGETS: Final[Mapping[str, tuple[float, float]]] = MappingProxyType({"atlas-egress": (30.0, 300.0)})
+CLOSE_GRACE_S: Final = 5.0  # bound on waiting for handlers after their connections were closed (TimeoutStopSec is 15)
 
 
 def _reply(**fields: Any) -> bytes:
@@ -61,12 +68,14 @@ class AuditServer:
         max_connections_per_actor: int = MAX_CONNECTIONS_PER_ACTOR,
         rate_per_s: float = APPEND_RATE_PER_S,
         burst: float = APPEND_BURST,
+        actor_budgets: Mapping[str, tuple[float, float]] = ACTOR_BUDGETS,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.fatal = asyncio.Event()  # set when the service must exit non-zero so systemd restarts it
         self._max_per_actor = max_connections_per_actor
         self._rate = rate_per_s
         self._burst = burst
+        self._actor_budgets = dict(actor_budgets)  # actor -> (rate per s, burst), overriding the default
         self._monotonic = monotonic
         self._actor_connections: dict[str, int] = {}
         self._buckets: dict[str, tuple[float, float]] = {}  # actor -> (tokens, last refill)
@@ -80,6 +89,8 @@ class AuditServer:
         self._connections = 0
         self._server: asyncio.Server | None = None
         self._ticker: asyncio.Task[None] | None = None
+        self._writers: set[asyncio.StreamWriter] = set()  # every open client connection, so close() can drop them
+        self._closing = False  # set under the lock: no append may land after the final stop records
 
     # ---- listening ---------------------------------------------------------------------------------
 
@@ -98,14 +109,34 @@ class AuditServer:
     def _start_ticker(self) -> None:
         self._ticker = asyncio.create_task(self._tick_loop())
 
-    async def close(self) -> None:
+    async def close(self, on_stop: Callable[[], object] | None = None, *, grace_s: float = CLOSE_GRACE_S) -> None:
+        """Stop accepting, run ``on_stop`` (the final records) under the append lock, then drop every client.
+
+        Known issue N4: atlas-egress always holds an idle pooled connection, and ``Server.wait_closed`` waits for open
+        connections, so the old order (wait first, then write the stop record) blocked past systemd's
+        ``TimeoutStopSec`` and ended in SIGKILL: no stop record and no clean-stop checkpoint. Now the final records are
+        written first, client connections are closed by us, and the wait is bounded. Appends that reach the lock after
+        ``on_stop`` are refused (``AUDIT_UNAVAILABLE``), so nothing unsigned follows the clean-stop checkpoint.
+        """
+        if self._server is not None:
+            self._server.close()  # no new connections
+        async with self._lock:  # waits for an in-flight append or housekeeping tick to finish its thread
+            self._closing = True
+            if self._ticker is not None:
+                self._ticker.cancel()
         if self._ticker is not None:
-            self._ticker.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._ticker
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
+        try:
+            if on_stop is not None:
+                async with self._lock:
+                    await asyncio.to_thread(on_stop)
+        finally:
+            for writer in list(self._writers):
+                writer.close()
+            if self._server is not None:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._server.wait_closed(), grace_s)
 
     async def _tick_loop(self) -> None:
         while True:
@@ -123,13 +154,17 @@ class AuditServer:
     # ---- connections -------------------------------------------------------------------------------
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._writers.add(writer)
         try:
+            if self._closing:
+                return
             await self._serve(reader, writer)
         except (ConnectionError, asyncio.IncompleteReadError, TimeoutError):
             pass
         except Exception:
             log.exception("unexpected error serving a connection")
         finally:
+            self._writers.discard(writer)
             with contextlib.suppress(Exception):
                 writer.close()
                 await writer.wait_closed()
@@ -169,9 +204,10 @@ class AuditServer:
 
     def _take_token(self, actor: str) -> bool:
         """Per-actor token bucket over all appends (durable kinds included)."""
+        rate, burst = self._actor_budgets.get(actor, (self._rate, self._burst))
         now = self._monotonic()
-        tokens, last = self._buckets.get(actor, (self._burst, now))
-        tokens = min(self._burst, tokens + (now - last) * self._rate)
+        tokens, last = self._buckets.get(actor, (burst, now))
+        tokens = min(burst, tokens + (now - last) * rate)
         if tokens < 1.0:
             self._buckets[actor] = (tokens, now)
             return False
@@ -189,6 +225,8 @@ class AuditServer:
                 if not self._take_token(actor):
                     raise SubmissionRejected("RATE_LIMITED")
                 async with self._lock:
+                    if self._closing:
+                        raise SubmissionRejected("AUDIT_UNAVAILABLE", "shutting down")
                     done = await asyncio.to_thread(self._log.append, actor, record)
                 return _reply(ok=True, seq=done.seq, hash=done.hash, durable=done.durable)
             if op == "outcome_unknown" and set(request) == {"op"}:
