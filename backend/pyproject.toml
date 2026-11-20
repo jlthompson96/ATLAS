@@ -22,6 +22,13 @@ core = [
 executor = [
     "cryptography>=46,<48",
 ]
+# atlas-ui: TLS static server and /ws/events (websockets), events.v1 validation (jsonschema), Argon2id
+# verification of the step-up PIN hash (argon2-cffi; hashlib has no Argon2).
+ui = [
+    "websockets>=17",
+    "jsonschema>=4.23",
+    "argon2-cffi>=23.1",
+]
 # Dev-machine tooling only: the mock event server and contract validation. Never installed on the Pi.
 mock = [
     "websockets>=17",
@@ -62,7 +69,7 @@ packages = ["atlas"]
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["jsonschema.*", "openapi_spec_validator.*"]
+module = ["jsonschema.*", "openapi_spec_validator.*", "argon2.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
