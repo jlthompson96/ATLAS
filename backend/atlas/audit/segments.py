@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Final, NoReturn
 
@@ -53,6 +54,22 @@ def read_lines(path: Path) -> tuple[list[bytes], bool]:
     parts = data.split(b"\n")
     parts.pop()  # empty string after the final newline, or the torn tail
     return parts, torn
+
+
+def iter_lines(path: Path) -> Iterator[bytes]:
+    """Stream the lines of ``path`` without reading the whole file (known issue N6: the verifier's memory).
+
+    Each complete line is yielded with its ``\\n``. An unterminated tail (a torn write, see ``read_lines``) is
+    yielded last without one, so the caller can tell the two apart. A line longer than ``MAX_LINE_BYTES``
+    raises ``ValueError`` instead of being buffered: the writer never produces one (requests are capped far
+    below it), so this is damage or tampering, and holding it in memory is what this function exists to avoid.
+    """
+    limit = MAX_LINE_BYTES + 1  # room for the newline
+    with path.open("rb") as handle:
+        while line := handle.readline(limit):
+            if len(line) == limit and not line.endswith(b"\n"):
+                raise ValueError("line too long")
+            yield line
 
 
 def _reject_constant(name: str) -> NoReturn:

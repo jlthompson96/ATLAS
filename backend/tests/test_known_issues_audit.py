@@ -1,4 +1,4 @@
-"""Regression tests for the open audit issues in docs/known-issues.md (N1, N4, G1). Each failed before its fix.
+"""Regression tests for the audit issues in docs/known-issues.md (N1, N2, N4, N6, G1). Each failed before its fix.
 
 The reviewer's reproduction scripts were lost; these rebuild the scenarios they described.
 """
@@ -15,19 +15,21 @@ import sys
 import tempfile
 import threading
 import time
+import tracemalloc
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from atlas.audit import jcs
 from atlas.audit.__main__ import main as audit_cli
 from atlas.audit.client import AuditClient, AuditError
 from atlas.audit.jcs import canonicalize
 from atlas.audit.keys import load_public_key, public_key_b64
 from atlas.audit.log import AuditConfig, AuditLog
 from atlas.audit.record import ZERO_HASH, record_hash
-from atlas.audit.segments import CHECKPOINT_SIDECAR, list_segments
+from atlas.audit.segments import CHECKPOINT_SIDECAR, MAX_LINE_BYTES, iter_lines, list_segments
 from atlas.audit.verify import verify_dir
 from tests.conftest import T0, Clock, egress_body, tool_call
 from tests.test_audit_cli import BACKEND, environment, pem
@@ -433,3 +435,94 @@ def test_n2_a_chain_starting_inside_an_unsigned_purge_range_is_still_rejected(ma
     log.close()
     list_segments(log.data_dir)[0][1].unlink()
     assert not verify_dir(log.data_dir).ok
+
+
+# --- N6: verifying a long purged chain at startup ----------------------------------------------------------------------
+
+
+def _purged_chain(directory: Path, key: Ed25519PrivateKey, records: int) -> AuditLog:
+    """``records`` honest records over four days, the oldest day purged, closed: what a restart verifies."""
+    clock = Clock()
+    log = AuditLog.open(AuditConfig(data_dir=directory), key, wall_clock_ms=clock.wall, monotonic=clock.monotonic)
+    for _day in range(4):
+        for i in range(records // 4):
+            log.append("atlas-egress" if i % 2 else "atlas-core", egress_body() if i % 2 else tool_call(i))
+        clock.advance(24 * 3600)
+    log.append("atlas-core", tool_call())
+    log.purge_segments([list_segments(directory)[0][1].stem], "retention")
+    log.close()
+    return log
+
+
+def _verify_peak_bytes(directory: Path) -> int:
+    tracemalloc.start()
+    try:
+        report = verify_dir(directory)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert report.ok, report.errors
+    assert report.first_seq is not None and report.first_seq > 0 and report.purged_through >= 0
+    return peak
+
+
+def test_n6_verify_memory_does_not_grow_with_the_chain(tmp_path: Path, key: Ed25519PrivateKey) -> None:
+    """The old verifier held every record (about 2.3 KB each): 4x the chain was 4x the memory, and a year at
+    20 MB/day did not fit on the Pi. Streaming keeps it flat."""
+    small = _verify_peak_bytes(_purged_chain(tmp_path / "small", key, 1_500).data_dir)
+    large = _verify_peak_bytes(_purged_chain(tmp_path / "large", key, 6_000).data_dir)
+    assert large < small * 1.5 + 64 * 1024, (small, large)
+    assert large < 1024 * 1024, large  # the old code needed ~14 MB here
+
+
+def test_n6_the_writer_resumes_on_a_long_purged_chain(tmp_path: Path, key: Ed25519PrivateKey, clock: Clock) -> None:
+    log = _purged_chain(tmp_path / "audit", key, 6_000)
+    head = log.head
+    resumed = restart(log, key, clock)  # runs the full verify_dir (review F1)
+    assert resumed.head == head
+    resumed.append("atlas-core", tool_call())
+    resumed.close()
+    report = verify_dir(log.data_dir, key.public_key(), resumed.head)
+    assert report.ok, report.errors
+
+
+def _reference_jcs_string(value: str) -> str:
+    """The per-character escaper the regex replaced (N6), kept as the oracle."""
+    short = {0x08: "\\b", 0x09: "\\t", 0x0A: "\\n", 0x0C: "\\f", 0x0D: "\\r", 0x22: '\\"', 0x5C: "\\\\"}
+    out = ['"']
+    for ch in value:
+        cp = ord(ch)
+        if cp in short:
+            out.append(short[cp])
+        elif cp < 0x20 or 0xD800 <= cp <= 0xDFFF:
+            out.append(f"\\u{cp:04x}")
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
+
+def test_n6_jcs_string_escaping_matches_the_reference_for_every_code_point() -> None:
+    every = "".join(chr(cp) for cp in range(0x110000))  # escaping is per character, so one string covers them all
+    assert jcs._string(every) == _reference_jcs_string(every)
+    for sample in ("", "plain", 'a"b\\c', "\x00\x1f\x7f", "\ud800x\udfff", "é😀" + chr(0x2028), "\n\r\t\b\f"):
+        assert jcs._string(sample) == _reference_jcs_string(sample)
+
+
+def test_n6_an_overlong_line_is_rejected_without_buffering_it(make_log: MakeLog) -> None:
+    log = make_log()
+    log.append("atlas-core", tool_call())
+    log.close()
+    segment = list_segments(log.data_dir)[-1][1]
+    with segment.open("ab") as handle:
+        handle.write(b"x" * (MAX_LINE_BYTES + 1))  # no newline: the reader must stop at the limit, not hunt for one
+    with pytest.raises(ValueError, match="too long"):
+        list(iter_lines(segment))
+    report = verify_dir(log.data_dir)
+    assert any("line too long" in e for e in report.errors), report.errors
+
+
+def test_n6_a_line_at_the_limit_is_still_read(tmp_path: Path) -> None:
+    path = tmp_path / "lines"
+    path.write_bytes(b"a" * MAX_LINE_BYTES + b"\nb\ntorn")
+    assert [len(x) for x in iter_lines(path)] == [MAX_LINE_BYTES + 1, 2, 4]

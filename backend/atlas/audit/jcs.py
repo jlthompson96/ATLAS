@@ -15,26 +15,26 @@ rather than being serialized: a canonical form that is ambiguous would break the
 
 from __future__ import annotations
 
+import re
 from typing import Any, Final
 
 MAX_SAFE_INT: Final = 2**53 - 1
 
 _SHORT_ESCAPES: Final = {0x08: "\\b", 0x09: "\\t", 0x0A: "\\n", 0x0C: "\\f", 0x0D: "\\r", 0x22: '\\"', 0x5C: "\\\\"}
+# Everything JSON.stringify escapes: control characters, '"', '\\' and lone surrogates (well-formed JSON.stringify).
+# Python str never holds a surrogate pair, so any surrogate here is a lone one.
+_NEEDS_ESCAPE: Final = re.compile('[\x00-\x1f"\\\\\ud800-\udfff]')
+
+
+def _escape(match: re.Match[str]) -> str:
+    cp = ord(match.group())
+    return _SHORT_ESCAPES.get(cp) or f"\\u{cp:04x}"
 
 
 def _string(value: str) -> str:
-    out: list[str] = ['"']
-    for ch in value:
-        cp = ord(ch)
-        short = _SHORT_ESCAPES.get(cp)
-        if short is not None:
-            out.append(short)
-        elif cp < 0x20 or 0xD800 <= cp <= 0xDFFF:  # control characters and lone surrogates (well-formed JSON.stringify)
-            out.append(f"\\u{cp:04x}")
-        else:
-            out.append(ch)
-    out.append('"')
-    return "".join(out)
+    # One C-level scan instead of a Python loop per character (known issue N6: verifying a year of records at
+    # startup re-hashes every one). Records are mostly IDs and hex hashes, so the substitution rarely fires.
+    return '"' + _NEEDS_ESCAPE.sub(_escape, value) + '"'
 
 
 def _utf16_key(name: str) -> bytes:
