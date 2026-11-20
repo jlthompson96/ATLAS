@@ -203,6 +203,30 @@ class EventHub:
 
 # --- text requests -----------------------------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class Readiness:
+    """``line``: why the model can't answer now (the request was queued), else ``None``.
+
+    ``saved``: earlier requests that were queued while the model was unreachable, to deliver now.
+    """
+
+    line: str | None
+    saved: tuple[str, ...] = ()
+
+
+class TextHooks(Protocol):
+    """Runs around a typed request when a real LLM link is configured (``atlas.core.link.LinkTextHooks``)."""
+
+    async def local_answer(self, text: str) -> str | None:
+        """An answer that needs no model (time, date, desktop wake/sleep/status), else ``None``."""
+        ...
+
+    async def ensure_ready(self, text: str) -> Readiness:
+        """Wake the host and load the model if needed."""
+        ...
+
+
 _CONTROL_STRIP = {c: None for c in [*range(0, 32), 127] if c not in (9, 10)}
 
 
@@ -238,8 +262,10 @@ class ControlServer:
         executor: ExecutorLink,
         peers: PeerAuthenticator,
         clock_ms: Callable[[], int],
+        text_hooks: TextHooks | None = None,
     ) -> None:
         self._hub = hub
+        self._text_hooks = text_hooks
         self._orchestrator = orchestrator
         self._store = store
         self._pending = pending
@@ -480,20 +506,27 @@ class ControlServer:
     async def _run_text(self, text: str) -> None:
         self._utterance += 1
         uid = f"u{self._utterance}"
-        resting = dict(self._hub.model.state)
+        resting: dict[str, Any] | None = dict(self._hub.model.state)
         try:
             emit = self._hub.emit
             await emit("transcript.final", {"utterance_id": uid, "role": "user", "text": text, "source": "text"})
+            hooks = self._text_hooks
+            local = await hooks.local_answer(text) if hooks is not None else None
+            if local is not None:
+                await self._say(f"a{self._utterance}", local)
+                return
             await emit("state.changed", {"state": "thinking"})
-            outcome = await self._orchestrator.handle(text, store=self._store)
-            reply = reply_text(outcome.reply, self._store) if outcome.reply else ""
-            if not reply:
-                reply = FAILURE_TEXT.get(outcome.phase, "Done.") + (f" ({outcome.code})" if outcome.code else "")
-            aid = f"a{self._utterance}"
-            reply = reply[:4000]
-            for chunk in _chunks(reply, 80):
-                await emit("assistant.delta", {"utterance_id": aid, "text": chunk})
-            await emit("transcript.final", {"utterance_id": aid, "role": "assistant", "text": reply, "source": "text"})
+            ready = await hooks.ensure_ready(text) if hooks is not None else Readiness(None)
+            if ready.line is not None:
+                if self._hub.model.state["state"] == "llm_unreachable":
+                    resting = None  # the wake gate's verdict stands
+                await self._say(f"a{self._utterance}", ready.line)
+                return
+            if hooks is not None:
+                resting = {"state": "idle"}  # the model answered, so whatever was wrong before is over
+            for i, saved in enumerate(ready.saved):  # requests queued while the host was down
+                await self._say(f"a{self._utterance}q{i}", await self._ask(saved))
+            await self._say(f"a{self._utterance}", await self._ask(text))
         except Exception as exc:
             log.error("text request failed: %s", type(exc).__name__)
             await self._hub.emit(
@@ -501,9 +534,25 @@ class ControlServer:
                 {"alert_id": f"e{self._utterance}", "level": "warn", "code": "LLM_ERROR", "message": "Request failed"},
             )
         finally:
-            if self._hub.model.state != resting:
+            if resting is not None and self._hub.model.state != resting:
                 await self._hub.emit("state.changed", resting)
             self._busy = False
+
+    async def _ask(self, text: str) -> str:
+        outcome = await self._orchestrator.handle(text, store=self._store)
+        reply = reply_text(outcome.reply, self._store) if outcome.reply else ""
+        if not reply:
+            reply = FAILURE_TEXT.get(outcome.phase, "Done.") + (f" ({outcome.code})" if outcome.code else "")
+        return reply
+
+    async def _say(self, aid: str, reply: str) -> None:
+        """One assistant message: streamed deltas, then the final transcript entry."""
+        reply = reply[:4000]
+        for chunk in _chunks(reply, 80):
+            await self._hub.emit("assistant.delta", {"utterance_id": aid, "text": chunk})
+        await self._hub.emit(
+            "transcript.final", {"utterance_id": aid, "role": "assistant", "text": reply, "source": "text"}
+        )
 
 
 def _remove_stale_socket(path: Path) -> None:

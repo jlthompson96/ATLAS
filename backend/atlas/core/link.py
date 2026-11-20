@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from atlas.core.auditing import AuditSink
-from atlas.core.pending import ListEventSink
+from atlas.core.control import Readiness
+from atlas.core.fallback import LocalResponder, parse_intent
+from atlas.core.pending import EventSink, ListEventSink
 from atlas.llm.interface import LLMBackend, LLMError, Ready
 from atlas.llm.lmstudio import DEFAULT_BASE_URL, CredentialError, LMStudioBackend, default_token_file
 from atlas.power.controller import Clock, HostPowerController, PowerConfig, SystemClock
@@ -90,7 +92,7 @@ class TerminalEvents(ListEventSink):
 class Link:
     backend: LMStudioBackend
     model: str
-    events: TerminalEvents
+    events: EventSink
     clock: Clock
     controller: HostPowerController | None = None
     gate: HostGate | None = None
@@ -133,8 +135,14 @@ async def resolve_model(backend: LLMBackend, requested: str | None) -> str | Non
     return loaded[0] if loaded else None
 
 
-async def build_link(args: argparse.Namespace, audit: AuditSink, out: TextIO) -> Link:
-    """Raises ``SystemExit`` with a plain message for configuration mistakes."""
+async def build_link(
+    args: argparse.Namespace, audit: AuditSink, out: TextIO, *, events: EventSink | None = None
+) -> Link:
+    """Raises ``SystemExit`` with a plain message for configuration mistakes.
+
+    ``events``: where wake progress and alerts go. Default: printed to ``out`` (the CLI). atlas-ui's dev
+    runner passes the core's ``EventHub`` so the HUD shows them instead.
+    """
     token_file = Path(args.token_file) if args.token_file else default_token_file()
     try:
         backend = LMStudioBackend.from_token_file(args.base_url, token_file)
@@ -145,8 +153,7 @@ async def build_link(args: argparse.Namespace, audit: AuditSink, out: TextIO) ->
         raise SystemExit("error: no model given and none is loaded; pass --model <id>")
     backend = LMStudioBackend.from_token_file(args.base_url, token_file, model=model)
     clock = SystemClock()
-    events = TerminalEvents(out, clock)
-    link = Link(backend, model, events, clock)
+    link = Link(backend, model, events if events is not None else TerminalEvents(out, clock), clock)
     if args.no_hostd:
         return link
     try:
@@ -163,9 +170,36 @@ async def build_link(args: argparse.Namespace, audit: AuditSink, out: TextIO) ->
         backend,
         hostd,
         model=model,
-        events=events,
+        events=link.events,
         clock=clock,
         queue=queue,
         model_vram_mb=args.model_vram_mb,
     )
     return link
+
+
+class LinkTextHooks:
+    """What the control socket runs around a typed request when the real LLM link is in use.
+
+    The same order as the CLI: the local grammar first (time, date, desktop wake/sleep/status never reach the
+    model), then the wake gate, then the orchestrator.
+    """
+
+    def __init__(self, link: Link) -> None:
+        self._link = link
+        self._responder = LocalResponder(
+            link.clock.now, link.controller, wake=link.wake_command, sleep=link.sleep_command
+        )
+
+    async def local_answer(self, text: str) -> str | None:
+        intent = parse_intent(text)
+        return None if intent is None else await self._responder.respond(intent)
+
+    async def ensure_ready(self, text: str) -> Readiness:
+        line = await self._link.ensure_ready(text)
+        if line is not None:
+            return Readiness(line)
+        if self._link.controller is not None:
+            self._link.controller.note_llm_request()
+        saved = tuple(s.text for s in self._link.gate.queue.drain()) if self._link.gate is not None else ()
+        return Readiness(None, saved)

@@ -1,14 +1,19 @@
-"""Run atlas-core (fake LLM) + atlas-ui + the built HUD on this machine, for development.
+"""Run atlas-core + atlas-ui + the built HUD on this machine, for development.
 
     python -m atlas.ui_server.dev [--port 8443] [--dir .atlas-dev]
+    python -m atlas.ui_server.dev --backend lmstudio --base-url http://<desktop>:1234 --token-file <f> --no-hostd
+
+The default model is scripted (``dev_responder``). ``--backend lmstudio`` takes the same options as
+``python -m atlas.core.cli`` (docs/runbooks/llm-link-dev.md): the HUD then talks to the real model, with the
+local grammar answering time/date/desktop questions first and the wake flow's progress shown on the orb.
 
 One process, but the two halves talk over a real Unix socket (the control socket) exactly as they will on the
 Pi. Everything it creates (throwaway TLS CA, device key, PIN hash for ``0000``, paired-device registry) lives
 under ``--dir`` (default ``backend/.atlas-dev``, gitignored). Demo data (weather, mail counts, ...) comes from
 the mock scenarios' baseline fixtures; the orb, transcript, pending actions and approvals are real atlas-core.
 
-Not for deployment: the model is scripted, "sending" an approved email only logs, and the control-socket
-peer check is the same-user fallback (``SameUserPeers``).
+Not for deployment: "sending" an approved email only logs, and the control-socket peer check is the
+same-user fallback (``SameUserPeers``).
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import logging
 import os
 import shutil
 import signal
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -30,13 +36,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from atlas.core.approvals import ApprovalService, DeviceDirectory, ExecutorLink, StepUpRegistry
 from atlas.core.auditing import RecordingAuditSink
-from atlas.core.control import ControlServer, EventHub, PeerAuthenticator, SameUserPeers
+from atlas.core.control import ControlServer, EventHub, PeerAuthenticator, SameUserPeers, TextHooks
 from atlas.core.fake_llm import ScriptedBackend, Turn, call_turn, demo_responder, text_turn
+from atlas.core.link import Link, LinkTextHooks, add_link_arguments, build_link
 from atlas.core.runtime import CoreRuntime, build_runtime
 from atlas.core.taint import Source, SourceKind, UntrustedContent
 from atlas.executor.approval_record import ApprovalSigner
-from atlas.llm.interface import Message, Role, ToolSpec
+from atlas.llm.interface import LLMBackend, Message, Role, ToolSpec
 from atlas.policy.engine import Allowlists
+from atlas.power.controller import HostPowerController
 from atlas.ui_server.app import build_server
 from atlas.ui_server.config import UiConfig
 from atlas.ui_server.devtls import make_dev_tls
@@ -106,11 +114,14 @@ def build_core(
     peers: PeerAuthenticator,
     executor: ExecutorLink,
     clock_ms: Callable[[], int] = now_ms,
-    backend: ScriptedBackend | None = None,
+    backend: LLMBackend | None = None,
+    hub: EventHub | None = None,
+    audit: RecordingAuditSink | None = None,
+    text_hooks: TextHooks | None = None,
 ) -> CoreStack:
-    """atlas-core with the scripted model, demo mail, a throwaway approval key and the given executor link."""
-    hub = EventHub()
-    audit = RecordingAuditSink("atlas-core")
+    """atlas-core with the given (default: scripted) model, demo mail, a throwaway approval key and executor."""
+    hub = hub or EventHub()
+    audit = audit or RecordingAuditSink("atlas-core")
     runtime = build_runtime(
         backend or ScriptedBackend(responder=dev_responder),
         audit=audit,
@@ -143,8 +154,17 @@ def build_core(
         executor=executor,
         peers=peers,
         clock_ms=clock_ms,
+        text_hooks=text_hooks,
     )
     return CoreStack(hub, runtime, approvals, stepups, devices, audit, control)
+
+
+async def _idle_sleep_loop(controller: HostPowerController) -> None:
+    while True:
+        await asyncio.sleep(30)
+        answer = await controller.maybe_sleep()
+        if answer is not None:
+            log.info("idle sleep: %s", type(answer).__name__)
 
 
 def ensure_dev_files(directory: Path) -> tuple[Path, Path, bytes, str]:
@@ -171,8 +191,25 @@ async def run(args: argparse.Namespace) -> int:
     sock_dir = Path(tempfile.mkdtemp(prefix="atlas-dev-", dir="/tmp"))
     sock = sock_dir / "core.sock"
 
-    core = build_core(peers=SameUserPeers(), executor=DevExecutor())
-    hub, control = core.hub, core.control
+    hub, audit = EventHub(), RecordingAuditSink("atlas-core")
+    link: Link | None = None
+    if args.backend == "lmstudio":
+        link = await build_link(args, audit, sys.stdout, events=hub)
+        print(f"Using LM Studio at {args.base_url}, model {link.model}.")
+    core = build_core(
+        peers=SameUserPeers(),
+        executor=DevExecutor(),
+        backend=link.backend if link is not None else None,
+        hub=hub,
+        audit=audit,
+        text_hooks=LinkTextHooks(link) if link is not None else None,
+    )
+    control = core.control
+    sleeper = (
+        asyncio.ensure_future(_idle_sleep_loop(link.controller))
+        if link is not None and link.controller is not None and args.idle_sleep
+        else None
+    )
     await control.start(sock)
     for step in sc.load(sc.BASELINE).setup:  # demo panels and host status (not real data)
         if step.type in ("host.status", "panel.update"):
@@ -209,6 +246,8 @@ async def run(args: argparse.Namespace) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
     await stop.wait()
+    if sleeper is not None:
+        sleeper.cancel()
     await server.stop()
     await control.stop()
     shutil.rmtree(sock_dir, ignore_errors=True)
@@ -221,6 +260,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dir", default=str(REPO / "backend" / ".atlas-dev"))
     parser.add_argument("--static-dir", default=str(REPO / "frontend" / "hud" / "dist"))
     parser.add_argument("--kiosk-code", action="store_true", help="also print a pairing code for a kiosk device")
+    add_link_arguments(parser)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     return asyncio.run(run(args))

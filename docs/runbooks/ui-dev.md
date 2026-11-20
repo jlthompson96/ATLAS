@@ -30,6 +30,25 @@ cd backend
 .venv/bin/python -m atlas.ui_server revoke dev-1a2b3c4d5e6f --state-dir .atlas-dev/state  # closes its open WebSocket within ~5 s
 ```
 
+## With the real model (LM Studio on your desktop)
+
+The same runner takes the CLI's LM Studio options (set up the desktop side and the token file first: [llm-link-dev.md](llm-link-dev.md)):
+
+```sh
+cd backend
+.venv/bin/python -m atlas.ui_server.dev --backend lmstudio \
+  --base-url http://<desktop-lan-ip>:1234 --token-file ~/.atlas-dev/lmstudio-token --no-hostd
+```
+
+- Typed requests go the same way as in the CLI. The local grammar answers time, date and desktop wake/sleep/status without the model. Everything else goes through the orchestrator and policy engine to LM Studio.
+- With hostd running on the desktop, drop `--no-hostd` and add `--hostd-url http://<desktop-ip>:8770 --mac <aa:bb:..>`. Then:
+  - A sleeping desktop is woken, and the orb shows `waking_host` with its stage.
+  - If the desktop doesn't come up, the orb shows `llm_unreachable` and the request is saved.
+  - The next request that reaches the model delivers the saved ones first.
+- Add `--idle-sleep` to let ATLAS put the desktop back to sleep after 20 idle minutes.
+- The demo inbox (Dana's fake email) and the recipient allowlist (`dana@example.org`) stay the same, so `send an email to Dana` still produces an approval card if the model proposes it. The model decides, so the wording varies.
+- The same caveats as the CLI apply. The LAN link is plain HTTP until WireGuard exists, so type only fake content.
+
 ## Check it in a real browser (UI-SEC-3/4)
 
 ```sh
