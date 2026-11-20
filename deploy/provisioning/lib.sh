@@ -131,7 +131,7 @@ install_firewall() {
   local problem
   problem="$(resolver_problem)"
   if [ -n "$problem" ]; then
-    local advice="disable it (systemctl disable --now systemd-resolved) and point /etc/resolv.conf at LAN_DNS from $site (docs/runbooks/provisioning.md)"
+    local advice="stop systemd-resolved if it runs (systemctl disable --now systemd-resolved) and make /etc/resolv.conf a plain file naming LAN_DNS from $site (docs/runbooks/provisioning.md)"
     if [ "$DRY_RUN" = "1" ]; then
       log "WARNING: $problem: DNS would fail under the firewall; a real run refuses. Fix: $advice"
     else
