@@ -526,7 +526,9 @@ def test_shellcheck_if_available() -> None:
     exe = shutil.which("shellcheck")
     if exe is None:
         pytest.skip("shellcheck is not installed on this machine; run it in the ARM64 VM")
-    result = subprocess.run([exe, *map(str, SCRIPTS)], capture_output=True, text=True, check=False)  # noqa: S603
+    # -x follows the sourced lib.sh (known issue S1); SCRIPTDIR resolves its `source=lib.sh` directive from any cwd
+    argv = [exe, "-x", "--source-path=SCRIPTDIR", *map(str, SCRIPTS)]
+    result = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603
     assert result.returncode == 0, result.stdout
 
 

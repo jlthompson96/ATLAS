@@ -32,7 +32,9 @@ done
 
 PI_HOST="${PI_HOST:-}"
 PI_USER="${PI_USER:-}"
-[ -n "$PI_HOST" ] && [ -n "$PI_USER" ] || die "set PI_HOST and PI_USER (e.g. PI_HOST=atlas-pi.example.org PI_USER=admin)"
+if [ -z "$PI_HOST" ] || [ -z "$PI_USER" ]; then
+  die "set PI_HOST and PI_USER (e.g. PI_HOST=atlas-pi.example.org PI_USER=admin)"
+fi
 if [ "$DRY_RUN" != "1" ]; then
   case "$PI_HOST" in *.example.org | *.example.com | *.example.net) die "PI_HOST is still a placeholder" ;; esac
 fi
@@ -55,8 +57,15 @@ stage="$work/stage"
 mkdir -p "$stage"
 
 log "== building release $version"
+locks=() # the per-service runtime locks; the dev lock is resolved for the Mac and never ships
+while IFS= read -r lock; do
+  if [ "$lock" != backend/requirements-dev.lock ]; then
+    locks+=("$lock")
+  fi
+done < <(git ls-files 'backend/requirements-*.lock')
+# ${locks[@]+...}: an empty array is "unbound" under set -u in the Mac's bash 3.2
 git archive --format=tar HEAD backend/atlas backend/pyproject.toml contracts deploy/provisioning/services.conf \
-  $(git ls-files 'backend/requirements-*.lock' | grep -v 'requirements-dev.lock') | tar -x -C "$stage"
+  ${locks[@]+"${locks[@]}"} | tar -x -C "$stage"
 # Never ship tests or caches (git archive of backend/atlas contains none, but be explicit), nor the dev-only mock event
 # server ("Never deployed", contracts/services.md section 2).
 find "$stage" -name __pycache__ -prune -exec rm -rf {} +

@@ -51,7 +51,9 @@ check_tar_entries() {
   if tar -tvf "$tarball" | grep -E ' link to |-> ' >/dev/null; then die "tarball contains links"; fi
   while IFS= read -r name; do
     name="${name#./}"
-    [ -n "$name" ] && [ "$name" != "." ] || continue
+    if [ -z "$name" ] || [ "$name" = "." ]; then
+      continue
+    fi
     case "$name" in
       /* | ../* | */../* | */.. | ..) die "unsafe path in tarball: $name" ;;
     esac
@@ -74,7 +76,9 @@ validate_lock() {
 # service_names: validated service names from the root-owned services.conf (never from the tarball).
 service_names() {
   local name found=0
-  [ -f "$CONF" ] && [ ! -L "$CONF" ] || die "missing $CONF"
+  if [ ! -f "$CONF" ] || [ -L "$CONF" ]; then
+    die "missing $CONF"
+  fi
   while read -r name _; do
     case "$name" in '' | '#'*) continue ;; esac
     [[ "$name" =~ $SERVICE_RE ]] || die "bad service name in $CONF: $name"
@@ -93,6 +97,18 @@ enabled_units() {
       echo "$name"
     fi
   done <"$CONF"
+}
+
+# release_versions: names in releases/ that are valid version strings, newest first (they sort chronologically: UTC
+# timestamp first). A glob, not `ls | grep`, so an odd file name (spaces, newlines, leading dashes) is never misread.
+release_versions() {
+  local path v
+  for path in "$BASE"/releases/*; do
+    v="${path##*/}"
+    if [[ "$v" =~ $VERSION_RE ]]; then
+      printf '%s\n' "$v"
+    fi
+  done | sort -r
 }
 
 current_version() {
@@ -128,6 +144,8 @@ build_venv() {
   local name="$1" lock="$2" wheels="$3" dest="$4"
   command -v systemd-run >/dev/null || die "systemd-run is required to build as an unprivileged user"
   rm -rf "${BUILD_STATE:?}/$name"
+  # The single quotes are intended (SC2016): $STATE_DIRECTORY, $1 and $2 expand in the unprivileged inner shell.
+  # shellcheck disable=SC2016
   systemd-run --quiet --pipe --wait --collect \
     -p DynamicUser=yes -p StateDirectory="atlas-build/$name" -p PrivateTmp=yes -p PrivateNetwork=yes \
     -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes \
@@ -144,7 +162,9 @@ cmd_install() {
   valid_version "$version"
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || die "bad sha256"
   local tarball="$BASE/incoming/$version.tar" dest="$BASE/releases/$version" partial="$BASE/releases/.$version.partial"
-  [ -f "$tarball" ] && [ ! -L "$tarball" ] || die "missing $tarball"
+  if [ ! -f "$tarball" ] || [ -L "$tarball" ]; then
+    die "missing $tarball"
+  fi
   [ ! -e "$dest" ] || die "release $version already exists"
   echo "$sha  $tarball" | sha256sum --check --status || die "sha256 mismatch: refusing to unpack"
 
@@ -238,8 +258,7 @@ cmd_prune() {
   keep_prev=""
   [ ! -L "$BASE/previous" ] || keep_prev="$(basename "$(readlink "$BASE/previous")")"
   local n=0 v
-  # Version strings sort chronologically (UTC timestamp first), newest first.
-  for v in $(cd "$BASE/releases" && ls -1 | grep -E "$VERSION_RE" | sort -r); do
+  for v in $(release_versions); do
     n=$((n + 1))
     if [ "$n" -gt "$KEEP" ] && [ "$v" != "$keep_cur" ] && [ "$v" != "$keep_prev" ]; then
       log "prune   $v"
@@ -253,7 +272,7 @@ cmd_list() {
   cur="$(current_version)"
   prev=""
   [ ! -L "$BASE/previous" ] || prev="$(basename "$(readlink "$BASE/previous")")"
-  for v in $(cd "$BASE/releases" && ls -1 | grep -E "$VERSION_RE" | sort -r); do
+  for v in $(release_versions); do
     if [ "$v" = "$cur" ]; then
       echo "$v  <- current"
     elif [ "$v" = "$prev" ]; then
