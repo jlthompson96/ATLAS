@@ -6,6 +6,7 @@ Scope: users and groups, `/var/lib/atlas` layout, systemd units, nftables, the r
 
 - Raspberry Pi OS 64-bit (Debian, Python **3.13**; the dependency locks are CPython 3.13 `aarch64`). Packages: `nftables`, `python3-venv`, `openssl`, `sudo`, `curl` (PT-1 script).
 - A maintenance window with the **read-only root overlay disabled** (PLAN 2.7: `raspi-config nonint disable_overlayfs`, reboot, provision, re-enable). The script writes `/etc` and `/usr/local/sbin`.
+- **The system resolver must be the LAN's DNS server, not a local stub.** Under the firewall only `atlas-egress` and root may send DNS, and only to `LAN_DNS`. With `systemd-resolved` running, lookups go through its own user and are dropped. Raspberry Pi OS doesn't run it by default; if it's active, `sudo systemctl disable --now systemd-resolved` and make `/etc/resolv.conf` a plain file with `nameserver <LAN_DNS>`. `provision-pi.sh` refuses to load the firewall otherwise (known issue V1).
 - **Console access** (keyboard and screen or serial). The firewall loads with default-deny output and SSH only from the admin IP; a wrong `ADMIN_IP` locks you out of SSH.
 - An admin account that is not named `atlas-*` (set `ATLAS_ADMIN_USER`); it uploads releases and may run exactly one root command (below).
 

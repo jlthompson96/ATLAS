@@ -39,8 +39,8 @@ the hardware is next.**
   - Chat with your own model from a terminal, or through the HUD in a browser, with every request going through the policy engine.
   - Approve a proposed action with a PIN.
 - **Tested so far:**
-  - 1,314 backend tests on the Mac, and again on Python 3.13 in an ARM64 Debian VM.
-  - The VM also gets the same provisioning and deploy as the Pi. Egress test PT-1 passes there, and the audit log survives hard power cuts.
+  - 1,324 backend tests on the Mac, and again on Python 3.13 in an ARM64 Debian VM.
+  - The VM also gets the same provisioning and deploy as the Pi. Egress test PT-1 passes there, the audit log survives hard power cuts, and a release that crash-loops is rolled back automatically.
 - **Not yet run on real hardware:** `atlas-hostd` (only tested against a simulated Windows layer), WireGuard, and everything that needs the Pi (Phase 0).
 - **No voice yet**, which comes in Phase 3.
 
@@ -402,7 +402,7 @@ deploy/vm/start.sh            # creates the "atlas" VM on first run, starts it a
 limactl shell atlas           # a shell inside
 ```
 
-The 2026-11-20 run provisioned a disposable copy of the VM like the Pi and deployed a real release to it. PT-1 and the systemd and audit checks pass there, and the audit log survived three hard power cuts. Results and what is still to check on the Pi are in [docs/runbooks/pi-verification.md](docs/runbooks/pi-verification.md).
+The 2026-11-20 run provisioned a disposable copy of the VM like the Pi and deployed a real release to it. PT-1 and the systemd and audit checks pass there, and the audit log survived three hard power cuts. The run found six problems (V1–V6); all are fixed, and the fixes were checked again in the VM. Results and what is still to check on the Pi are in [docs/runbooks/pi-verification.md](docs/runbooks/pi-verification.md).
 
 ## Contracts
 

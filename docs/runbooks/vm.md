@@ -67,6 +67,7 @@ The running list is in [pi-verification.md](pi-verification.md) and [known-issue
   - The Pi locks (audit, core, executor) reproduce byte-for-byte.
   - `nft -c` on `atlas.nft` with the example site file is OK.
 - **2026-11-20, known-issues fix branch (N1–N5, G1, D2, D3, S1):** ruff, format and mypy clean; backend 1320 passed, 1 skipped (HUD not built); `shellcheck -x` clean, so `test_shellcheck_if_available` passes. The GNU-tar `atlas-release install` tests (N5) run here and skip on the Mac. `nft -c` of a `/tmp` copy of the ruleset with the updated example site file is OK. Note: a worktree's `.git` points at a Mac path, so to test a branch from a worktree, ship `git archive HEAD` into the VM instead of cloning the mount.
+- **2026-11-20, VM-findings fix branch (V1, V4, V5, V6):** ruff, format and mypy clean; backend 1330 passed, 2 skipped (HUD not built; the bsdtar test is macOS-only); `shellcheck -x --source-path=SCRIPTDIR` clean. V1, V4 and V5 were also checked for real in `atlas-test` ([pi-verification.md](pi-verification.md#vm-run-2026-11-20)). To test the health check's rollback, deploy a release from a throwaway worktree whose `atlas.audit serve` exits after a couple of seconds, then delete the branch.
 
 ## A disposable copy for root-level tests
 

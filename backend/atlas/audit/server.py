@@ -102,8 +102,14 @@ class AuditServer:
         self._start_ticker()
 
     async def listen_socket(self, sock: socket.socket) -> None:
-        """Serve on an already-listening socket (systemd socket activation)."""
-        self._server = await asyncio.start_unix_server(self._handle, sock=sock, limit=MAX_REQUEST_BYTES)
+        """Serve on an already-listening socket (systemd socket activation).
+
+        systemd owns the socket path: asyncio must not unlink it on close (known issue V4). It can't anyway (the
+        directory isn't ours), but if it ever could, socket activation would break until the socket unit restarts.
+        """
+        self._server = await asyncio.start_unix_server(
+            self._handle, sock=sock, limit=MAX_REQUEST_BYTES, cleanup_socket=False
+        )
         self._start_ticker()
 
     def _start_ticker(self) -> None:
