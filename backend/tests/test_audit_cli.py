@@ -68,7 +68,7 @@ def test_serve_refuses_unknown_peers_and_shuts_down_cleanly() -> None:
             assert proc.wait(timeout=10) == 0
         report = verify_dir(root / "audit")
         assert report.ok, report.errors
-        assert report.records == 4  # genesis, service_start, service_stop, a signed checkpoint of the tail
+        assert report.records == 5  # genesis, its checkpoint, service_start, service_stop, a checkpoint of the tail
         assert report.records_after_last_checkpoint == 0
         assert (root / "audit" / "checkpoint.pub").is_file()
 

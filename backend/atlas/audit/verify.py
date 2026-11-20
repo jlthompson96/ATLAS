@@ -13,9 +13,11 @@ Trust rules (review F1). Nothing unsigned vouches for anything:
 * An ``expect_head``, or a sidecar entry, that predates the surviving chain is an error unless such a
   covered purge accounts for that seq range.
 * Records after the last verified checkpoint are counted and reported; more than ``max_unsigned_records``
-  of them, or more than ``max_unsigned_seconds`` (plus a grace) of timestamps, is an error because the
-  writer would have signed a checkpoint by then. Within those bounds they are the live tail, which an
-  attacker without an off-box anchor can still rewrite or drop (docs/runbooks/audit.md).
+  of them is an error because the writer would have signed a checkpoint by then. Within that bound they
+  are the live tail, which an attacker without an off-box anchor can still rewrite or drop
+  (docs/runbooks/audit.md). There is deliberately no wall-clock rule (known issue N1): ``ts`` is chosen
+  by whoever wrote the record, so it only ever constrained honest writers, and the writer's hourly timer
+  is monotonic and restarts with the process. The writer signs any unsigned tail when it starts instead.
 """
 
 from __future__ import annotations
@@ -38,8 +40,6 @@ from atlas.audit.segments import (
 )
 
 DEFAULT_MAX_UNSIGNED_RECORDS = 1000  # == the writer's default checkpoint_every
-DEFAULT_MAX_UNSIGNED_SECONDS = 3600  # == the writer's default checkpoint interval
-TIME_GRACE_SECONDS = 300  # the writer checks the clock on appends and on a 5 s timer
 
 
 @dataclass(frozen=True)
@@ -162,7 +162,6 @@ def verify_dir(
     expect_head: tuple[int, str] | None = None,
     *,
     max_unsigned_records: int = DEFAULT_MAX_UNSIGNED_RECORDS,
-    max_unsigned_seconds: int = DEFAULT_MAX_UNSIGNED_SECONDS,
 ) -> VerifyReport:
     report = VerifyReport()
     if public_key is None:
@@ -250,19 +249,12 @@ def verify_dir(
     elif first["prev_hash"] != ZERO_HASH:
         report.errors.append("genesis prev_hash is not 64 zeros")
 
-    _check_tail(report, records, last_cp_record, max_unsigned_records, max_unsigned_seconds)
-    _check_sidecar(
-        data_dir, report, chain_checkpoints, hashes, covered, records, max_unsigned_records, max_unsigned_seconds
-    )
+    _check_tail(report, records, last_cp_record, max_unsigned_records)
+    _check_sidecar(data_dir, report, chain_checkpoints, hashes, covered, records, max_unsigned_records)
     if expect_head is not None:
         _check_expected_head(report, expect_head, hashes, covered)
     report.outcome_unknown = find_outcome_unknown(records)
     return report
-
-
-def _span_seconds(records: list[dict[str, Any]], since: dict[str, Any] | None) -> float:
-    start = since["ts"] if since is not None else records[0]["ts"]
-    return float(records[-1]["ts"] - start) / 1000.0
 
 
 def _check_tail(
@@ -270,7 +262,6 @@ def _check_tail(
     records: list[dict[str, Any]],
     last_cp_record: dict[str, Any] | None,
     max_records: int,
-    max_seconds: int,
 ) -> None:
     after = (records[-1]["seq"] - last_cp_record["seq"]) if last_cp_record else len(records)
     report.records_after_last_checkpoint = after
@@ -278,8 +269,6 @@ def _check_tail(
         report.errors.append(
             f"{after} records after the last verified checkpoint (limit {max_records}): the writer would have signed one"
         )
-    elif after and _span_seconds(records, last_cp_record) > max_seconds + TIME_GRACE_SECONDS:
-        report.errors.append("more than an hour of records after the last verified checkpoint")
 
 
 def _covers(covered: list[dict[str, Any]], seq: int) -> dict[str, Any] | None:
@@ -317,11 +306,10 @@ def _check_sidecar(
     covered: list[dict[str, Any]],
     records: list[dict[str, Any]],
     max_records: int,
-    max_seconds: int,
 ) -> None:
     sidecar = _read_sidecar(data_dir, report)
     if not sidecar:
-        long_chain = len(records) > max_records or _span_seconds(records, None) > max_seconds
+        long_chain = len(records) > max_records
         if chain_checkpoints and (sidecar is None or len(chain_checkpoints) > 1):
             report.errors.append(f"{CHECKPOINT_SIDECAR} is missing or empty")
         elif long_chain:

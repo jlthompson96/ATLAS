@@ -157,6 +157,11 @@ class AuditLog:
             log._append_internal(
                 "genesis", {"genesis": {"chain_id": config.chain_id, "note": "chain created"}, "context": "system"}
             )
+        # Sign whatever is unsigned before appending anything (known issue N1): after an unclean stop (power cut,
+        # SIGKILL) the previous run's tail would otherwise wait for a cadence that restarts from zero. A fresh chain
+        # gets its genesis signed the same way (G1), so even a new log carries a signature the off-box key can check.
+        if log._head_seq > log._last_cp_record_seq:
+            log.checkpoint_now()
         return log
 
     def close(self) -> None:
