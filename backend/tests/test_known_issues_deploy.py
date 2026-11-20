@@ -189,11 +189,23 @@ def firewall_dirs(tmp_path: Path) -> tuple[Path, Path]:
     return src, etc
 
 
-def firewall(tmp_path: Path, src: Path, etc: Path) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+def firewall(
+    tmp_path: Path,
+    src: Path,
+    etc: Path,
+    *,
+    resolved_active: bool = False,
+    resolv_conf: str = "nameserver 198.51.100.1\n",
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run lib.sh's install_firewall for real, as root would, except that nft and systemctl are recorded, not run, and
-    install's owner flags are dropped. Returns the result and the recorded nft/systemctl calls."""
+    install's owner flags are dropped. Returns the result and the recorded nft/systemctl calls.
+
+    ``systemctl is-active`` answers for systemd-resolved from ``resolved_active``; /etc/resolv.conf is a stand-in (V1).
+    """
     calls = tmp_path / "calls.log"
     calls.write_text("")
+    resolv = tmp_path / "resolv.conf"
+    resolv.write_text(resolv_conf)
     snippet = f"""
 set -euo pipefail
 source "{LIB}"
@@ -204,10 +216,18 @@ install() {{
   command install "${{a[@]}}"
 }}
 nft() {{ echo "nft $*" >>"{calls}"; if [ -n "${{NFT_FAIL_ON:-}}" ] && grep -q "$NFT_FAIL_ON" "{etc}/nftables-site.nft"; then return 1; fi; }}
-systemctl() {{ echo "systemctl $*" >>"{calls}"; }}
+systemctl() {{
+  echo "systemctl $*" >>"{calls}"
+  if [ "$1" = is-active ]; then [ "$RESOLVED_ACTIVE" = 1 ]; fi
+}}
 install_firewall "{etc}" "{src}"
 """
-    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "NFT_FAIL_ON": "BROKEN"}
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "NFT_FAIL_ON": "BROKEN",
+        "RESOLVED_ACTIVE": "1" if resolved_active else "0",
+        "RESOLV_CONF": str(resolv),
+    }
     result = subprocess.run(["/bin/bash", "-c", snippet], capture_output=True, text=True, check=False, env=env)  # noqa: S603
     return result, calls.read_text().splitlines()
 

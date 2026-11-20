@@ -32,6 +32,7 @@ set -euo pipefail
 BASE=/var/lib/atlas
 KEEP=3
 HEALTH_TIMEOUT=30
+HEALTH_STABLE=10 # seconds every unit must stay up, unrestarted, after becoming active (V5)
 VERSION_RE='^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}$'
 SERVICE_RE='^atlas-[a-z]+$'
 CONF=/etc/atlas/services.conf
@@ -153,14 +154,30 @@ switch_symlink() { # switch_symlink NAME VERSION: atomic replace
   mv -T "$BASE/.$name.new" "$BASE/$name"
 }
 
+# health_check: every enabled unit becomes active within HEALTH_TIMEOUT, then stays active with no restart for
+# HEALTH_STABLE seconds. "Active once" isn't enough: a unit that crashes on start is briefly active between
+# Restart= attempts (known issue V5, seen in the ARM64 VM).
 health_check() {
-  local deadline=$((SECONDS + HEALTH_TIMEOUT)) name
+  local deadline=$((SECONDS + HEALTH_TIMEOUT)) name before="" after=""
   for name in $(enabled_units); do
     while ! systemctl is-active --quiet "$name.service"; do
       [ "$SECONDS" -lt "$deadline" ] || { log "unhealthy: $name"; return 1; }
       sleep 1
     done
+    before+="$name=$(systemctl show -p NRestarts --value "$name.service") "
   done
+  sleep "$HEALTH_STABLE"
+  for name in $(enabled_units); do
+    if ! systemctl is-active --quiet "$name.service"; then
+      log "unhealthy: $name stopped within ${HEALTH_STABLE}s"
+      return 1
+    fi
+    after+="$name=$(systemctl show -p NRestarts --value "$name.service") "
+  done
+  if [ "$after" != "$before" ]; then
+    log "unhealthy: a unit restarted within ${HEALTH_STABLE}s (restart counts before: ${before% }; after: ${after% })"
+    return 1
+  fi
 }
 
 restart_units() {
@@ -182,7 +199,7 @@ build_venv() {
     -p DynamicUser=yes -p StateDirectory="atlas-build/$name" -p PrivateTmp=yes -p PrivateNetwork=yes \
     -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes \
     /bin/sh -c 'set -eu; v="$STATE_DIRECTORY/venv"; /usr/bin/python3 -I -m venv "$v"
-      "$v/bin/python" -I -m pip --isolated install --quiet --no-index --find-links "$1" \
+      "$v/bin/python" -I -m pip --isolated install --quiet --no-cache-dir --no-index --find-links "$1" \
         --require-hashes --only-binary=:all: --no-deps -r "$2"' sh "$wheels" "$lock" \
     || die "building the venv for $name failed"
   cp -a --no-preserve=ownership "$BUILD_STATE/$name/venv" "$dest"

@@ -96,6 +96,23 @@ has_ipv6_placeholder() {
 # this repository's deploy/nftables. The ruleset is atlas.nft PLUS the owner's site file ETC/nftables-site.nft, so a
 # change to EITHER is validated with `nft -c` before it replaces anything, then reloaded (known issue D2). The site file
 # that was last loaded is kept as nftables-site.nft.applied to detect edits; the previous one as nftables-site.nft.prev.
+# resolver_problem: prints why the system resolver can't work under atlas.nft, or nothing. Only atlas-egress and root
+# may send DNS, straight to LAN_DNS (PLAN 5.7). A local stub such as systemd-resolved sends its upstream queries as
+# its own user, which the output policy drops, so every lookup fails (known issue V1, found in the ARM64 VM).
+resolver_problem() {
+  local conf="${RESOLV_CONF:-/etc/resolv.conf}" servers
+  if systemctl is-active --quiet systemd-resolved.service; then
+    echo "systemd-resolved is active"
+    return 0
+  fi
+  servers="$(awk '$1 == "nameserver" { print $2 }' "$conf" 2>/dev/null || true)"
+  if [ -z "$servers" ]; then
+    echo "$conf names no nameserver"
+  elif ! printf '%s\n' "$servers" | grep -qvE '^(127\.|::1$)'; then
+    echo "$conf names only loopback resolvers ($(printf '%s' "$servers" | tr '\n' ' '))"
+  fi
+}
+
 install_firewall() {
   local etc="$1" src="$2"
   local site="$etc/nftables-site.nft" applied="$etc/nftables-site.nft.applied" nft_changed=0 site_changed=0
@@ -110,6 +127,16 @@ install_firewall() {
   fi
   if [ "$DRY_RUN" != "1" ] && has_ipv6_placeholder "$site"; then
     die "$site still holds the RFC 3849 placeholder 2001:db8:: (LAN_PREFIX6): set your LAN's global IPv6 prefix, or fd00::/8 if the LAN has none (docs/runbooks/provisioning.md)"
+  fi
+  local problem
+  problem="$(resolver_problem)"
+  if [ -n "$problem" ]; then
+    local advice="disable it (systemctl disable --now systemd-resolved) and point /etc/resolv.conf at LAN_DNS from $site (docs/runbooks/provisioning.md)"
+    if [ "$DRY_RUN" = "1" ]; then
+      log "WARNING: $problem: DNS would fail under the firewall; a real run refuses. Fix: $advice"
+    else
+      die "$problem: DNS would fail under the ATLAS firewall (only atlas-egress and root may query LAN_DNS). Fix: $advice"
+    fi
   fi
   if [ -f "$etc/atlas.nft" ] && ! cmp -s "$src/atlas.nft" "$etc/atlas.nft"; then
     nft_changed=1
