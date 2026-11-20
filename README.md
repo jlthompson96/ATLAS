@@ -26,13 +26,25 @@ plan, with every decision, benchmark and acceptance test, is
 [docs/PLAN.md](docs/PLAN.md). The interfaces that hold it together are versioned in
 [contracts/](contracts/).
 
-**Status: contracts are approved and the foundations are being built.** Step C0 (the
-repository, five v1 contracts and a mock event server) is done. `atlas-hostd`, the agent
-on the desktop, is merged and passes 225 tests against a simulated Windows layer; it has
-not yet run on Windows. The HUD and the Pi foundations (audit log, egress proxy,
-nftables, systemd units) are built on their own branches, waiting on merge and, for the
-egress proxy, a security review. Phase 0 (hardening the Pi itself) is hands-on hardware
-work and is next. **Nothing here runs a voice assistant yet.**
+**Status (2026-11-20): the software for a text-only ATLAS runs on the development Mac;
+the hardware is next.**
+
+- **Built:**
+  - The contracts and the HUD.
+  - The Pi foundations: audit log, egress proxy, firewall, systemd units, provisioning and deploy.
+  - The security core: orchestrator, policy engine, taint tracking, approval signing.
+  - The link to LM Studio, with Wake-on-LAN.
+  - The real `atlas-ui` server.
+- **Can do today:**
+  - Chat with your own model from a terminal, or through the HUD in a browser, with every request going through the policy engine.
+  - Approve a proposed action with a PIN.
+- **Tested so far:**
+  - 1,314 backend tests on the Mac, and again on Python 3.13 in an ARM64 Debian VM.
+  - The VM also gets the same provisioning and deploy as the Pi. Egress test PT-1 passes there, and the audit log survives hard power cuts.
+- **Not yet run on real hardware:** `atlas-hostd` (only tested against a simulated Windows layer), WireGuard, and everything that needs the Pi (Phase 0).
+- **No voice yet**, which comes in Phase 3.
+
+Open problems are tracked in [docs/known-issues.md](docs/known-issues.md).
 
 ## The services
 
@@ -195,18 +207,18 @@ rule is enforced and the test that must prove it. Test IDs are from PLAN.md §8.
 
 | Rule | Enforced by | Proven by | Status |
 |---|---|---|---|
-| **Only one process reaches the internet** | nftables `output` policy drop; only `atlas-egress`'s user may open 443 out. Per-caller hostname allowlists in the proxy, SNI must match the CONNECT host | PT-1, PT-2, PT-4 (72 h packet capture sees only allowlisted hosts) | Built on agent C's branch, awaiting security review |
-| **Every tool call is audited** | `atlas-audit`: append-only segments, SHA-256 hash chain, signed checkpoints, `chattr +a`. The actor comes from `SO_PEERCRED`, never from the record | PT-13 (tamper detection) | Built on agent C's branch |
-| **Untrusted content cannot act** | A quarantined reader context with no tools; taint gating in the policy engine | RT-1..14 (prompt-injection red team) | Phase 1 |
-| **Writes need you, not the model** | Pending-actions queue; approval bound to the payload's hash; step-up PIN; a separate executor process holds the only send credentials | AP-1 (changed payload rejected), AP-3 (expired approval rejected) | Contract fixed; built in Phase 6 |
+| **Only one process reaches the internet** | nftables `output` policy drop; only `atlas-egress`'s user may open 443 out. Per-caller hostname allowlists in the proxy, SNI must match the CONNECT host | PT-1, PT-2, PT-4 (72 h packet capture sees only allowlisted hosts) | **Built**; PT-1 passes in the ARM64 VM. PT-2/PT-4 need the Pi |
+| **Every tool call is audited** | `atlas-audit`: append-only segments, SHA-256 hash chain, signed checkpoints, `chattr +a`. The actor comes from `SO_PEERCRED`, never from the record | PT-13 (tamper detection) | **Built**; in the VM root's overwrite of a segment is refused and the chain survives hard power cuts |
+| **Untrusted content cannot act** | A quarantined reader context with no tools; taint gating in the policy engine | RT-1..14 (prompt-injection red team) | **Built**; the Mac-testable red-team cases pass against a fake model that obeys injected instructions |
+| **Writes need you, not the model** | Pending-actions queue; approval bound to the payload's hash; step-up PIN; a separate executor process holds the only send credentials | AP-1 (changed payload rejected), AP-3 (expired approval rejected) | **Built** (signing, hash binding, single-use step-up, expiry); real sending arrives in Phase 6 |
 | **Voice cannot approve** | Approvals only from a paired device with a PIN. A TV saying "Hey Atlas, approve" does nothing | AP-2, RT-13 | Phase 6 |
-| **The kiosk cannot approve** | Device permissions sent by `atlas-ui`; the mock already serves kiosk permissions | AP-4 | Contract fixed |
+| **The kiosk cannot approve** | `atlas-ui` refuses a kiosk step-up, and `atlas-core` refuses a kiosk's decision on its own | AP-4 | **Built and tested** |
 | **Unattended work cannot write** | Scheduled research runs without write tools | UW-1..4 | Phase 5 |
 | **Research never sees private data** | `atlas-research` has `PrivateNetwork=yes` and reaches the web only through the egress socket, with budgets, query caps and a kill switch | PT-14, KS-1 (stops within 2 s) | Phase 5 |
 | **Secrets stay in the secrets store** | `systemd-creds` per service; never in a prompt, a log or the repo; sensitive event fields go through `redact_for_log()` | PT-5, PT-6 | Contract fixed |
 | **The desktop holds no secrets** | Only its own WireGuard key. LM Studio and `atlas-hostd` are blocked outbound by Windows Firewall | PT-3, PT-10 | Phase 1 |
 | **Only the Pi may talk to `atlas-hostd`** | Source address checked before a request is parsed; size and time limits; refuses to bind `0.0.0.0` | `hostd/tests/` | **Built and tested** (on a simulated platform) |
-| **Wake-on-LAN cannot be abused into a DoS** | Wake rate limits and off-hours policy in code; a wake ATLAS did not cause raises an alert; idle sleep enforced by `atlas-hostd` | OW-1..4, RT-12 | `atlas-hostd` side built; Phase 1 |
+| **Wake-on-LAN cannot be abused into a DoS** | Wake rate limits and off-hours policy in code; a wake ATLAS did not cause raises an alert; idle sleep enforced by `atlas-hostd` | OW-1..4, RT-12 | **Built on both sides**; real wake needs the desktop |
 | **Financial data is minimised** | A fixed watchlist with ~20 decoy tickers; the portfolio file is encrypted with a passphrase held in RAM; amounts not spoken by default; no broker credentials, no trading | PT-15, PT-16, RT-15, MK-1..4 | Phase 4 |
 | **Every event matches the contract** | The mock server validates every frame against `events.v1` and the state machine | `backend/tests/test_contracts.py`, `test_mock_server.py` | **Built and tested** |
 | **Dependencies are hash-pinned** | `--require-hashes` lockfiles; `npm ci --ignore-scripts`; models as GGUF/ONNX/safetensors with recorded SHA-256, never pickle | PT-7 | In force |
@@ -223,7 +235,7 @@ that expire within 7 days, and a rehearsed theft runbook.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="docs/assets/phases-light.svg">
-    <img src="docs/assets/phases.svg" alt="Build status: Step C0 and atlas-hostd done; the HUD and Pi foundations built and awaiting merge; Phase 0 next, Phases 1 to 6 planned" width="100%">
+    <img src="docs/assets/phases.svg" alt="Build status: Step C0, atlas-hostd, the HUD and the Pi foundations merged; Phase 0 next (hardware); Phase 1 and Phase 2 software built; Phases 3 to 6 planned" width="100%">
   </picture>
 </p>
 
@@ -235,9 +247,13 @@ works as one coherent design.
 | Step | What | Status |
 |---|---|---|
 | C0 | Repository, `CLAUDE.md`, five v1 contracts, mock event server | **Done** |
-| A | HUD: layout profiles, orb states, panels, privacy mode, accessibility | Built; awaiting merge |
+| A | HUD: layout profiles, orb states, panels, privacy mode, accessibility | **Merged** |
 | B | `atlas-hostd`: status, sleep, NVML telemetry, activity helper, WoL test tool | **Merged** (hostd.v1 1.1.0) |
-| C | Pi foundations: audit, egress proxy, nftables, systemd units, provisioning | Built; awaiting security review |
+| C | Pi foundations: audit, egress proxy, nftables, systemd units, provisioning | **Merged** after a security review; the issues that blocked the Pi are fixed |
+| Security core | Orchestrator, policy engine, taint tracking, quarantined reader, memory, approval signing, executor verification | **Merged** after a security review and a fix round |
+| Phase 1 software | LM Studio backend, `atlas-hostd` client, Wake-on-LAN and the wake flow, local grammar for time/date/wake/sleep | **Merged**; not yet run against the real desktop |
+| Phase 2 server | `atlas-ui`: HTTPS, device pairing, step-up PIN, privacy mode, the core control socket | **Merged**; the kiosk on the Pi is still to do |
+| ARM64 VM | Debian 13 VM on the Mac standing in for the Pi: Python 3.13, provisioning, deploy, PT-1, power cuts | **Running**; results in [pi-verification.md](docs/runbooks/pi-verification.md) |
 
 Every phase ends with an ADR and recorded benchmarks.
 
@@ -349,6 +365,45 @@ static files; there is no Node on the Pi. All assets are local (no CDN, self-hos
 fonts), event types are generated from `contracts/events.v1.schema.json`, and installs
 use `npm ci --ignore-scripts` only. The Vite dev server proxies `/ws/events` to the mock.
 
+### Talk to your own model
+
+The text agent runs the real orchestrator, policy engine and quarantined reader. It runs either against a scripted stand-in model (the default) or against LM Studio on your desktop. Desktop setup and the security caveats are in [docs/runbooks/llm-link-dev.md](docs/runbooks/llm-link-dev.md).
+
+```sh
+cd backend
+.venv/bin/python -m atlas.core.cli                                   # scripted model
+umask 077 && mkdir -p ~/.atlas-dev && cat > ~/.atlas-dev/lmstudio-token   # once: paste the LM Studio token, Ctrl-D
+.venv/bin/python -m atlas.core.cli --backend lmstudio \
+  --base-url http://<desktop-lan-ip>:1234 --token-file ~/.atlas-dev/lmstudio-token --no-hostd
+```
+
+Time, date and "is the desktop awake" are answered locally and never reach the model. With `atlas-hostd` running on the desktop, drop `--no-hostd` and add `--hostd-url` and `--mac`, so ATLAS can wake the desktop and put it back to sleep. Until WireGuard is set up the link is plain HTTP on the LAN, so type only fake content.
+
+### The HUD on live data
+
+The real `atlas-ui` server, the core behind it and the built HUD, in one process. Details are in [docs/runbooks/ui-dev.md](docs/runbooks/ui-dev.md).
+
+```sh
+cd frontend/hud && npm ci --ignore-scripts && npm run build
+cd ../../backend && .venv/bin/python -m atlas.ui_server.dev          # prints https://localhost:8443 and a pairing code
+.venv/bin/python -m atlas.ui_server.dev --backend lmstudio \
+  --base-url http://<desktop-lan-ip>:1234 --token-file ~/.atlas-dev/lmstudio-token --no-hostd
+```
+
+Open the URL and accept the throwaway local certificate. Enter the pairing code, type a request, and approve a proposed email with PIN `0000`. The "send" only writes to the log.
+
+### The ARM64 VM
+
+A Debian 13 `aarch64` VM under [Lima](https://lima-vm.io) stands in for the Pi until it's set up. It has the Pi's OS base and Python 3.13, plus a real kernel with systemd, nftables, `systemd-creds` and `chattr`. Only this repository is shared into it, read-only. See [docs/runbooks/vm.md](docs/runbooks/vm.md).
+
+```sh
+brew install lima
+deploy/vm/start.sh            # creates the "atlas" VM on first run, starts it afterwards
+limactl shell atlas           # a shell inside
+```
+
+The 2026-11-20 run provisioned a disposable copy of the VM like the Pi and deployed a real release to it. PT-1 and the systemd and audit checks pass there, and the audit log survived three hard power cuts. Results and what is still to check on the Pi are in [docs/runbooks/pi-verification.md](docs/runbooks/pi-verification.md).
+
 ## Contracts
 
 Five interfaces are fixed and versioned. Feature branches never edit them; a change is a
@@ -368,8 +423,9 @@ proposal in [contracts/proposals/](contracts/proposals/) with a revision bump, r
 ```text
 contracts/      Versioned interfaces, examples, proposals and the changelog.
 docs/           PLAN.md, ADRs, runbooks, the threat model, README assets.
-backend/atlas/  core/ voice/ llm/ power/ integrations/ research/ egress/ audit/
-                memory/ ui_server/ policy/. Mostly empty until each phase lands.
+backend/atlas/  core/ llm/ power/ egress/ audit/ memory/ ui_server/ policy/ executor/ net/
+                (built); voice/ integrations/ research/ (empty until their phases).
+deploy/vm/      The ARM64 Debian VM config (Lima).
 backend/tests/  Unit and contract tests.
 hostd/          atlas_hostd: the Windows service and per-user helper.
 frontend/hud/   @atlas/hud.
