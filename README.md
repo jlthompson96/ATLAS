@@ -39,7 +39,7 @@ the hardware is next.**
   - Chat with your own model from a terminal, or through the HUD in a browser, with every request going through the policy engine.
   - Approve a proposed action with a PIN.
 - **Tested so far:**
-  - 1,324 backend tests on the Mac, and again on Python 3.13 in an ARM64 Debian VM.
+  - About 1,380 backend tests, on the Mac and again on Python 3.13 in an ARM64 Debian VM (a few run on only one of the two).
   - The VM also gets the same provisioning and deploy as the Pi. Egress test PT-1 passes there, the audit log survives hard power cuts, and a release that crash-loops is rolled back automatically.
 - **Not yet run on real hardware:** `atlas-hostd` (only tested against a simulated Windows layer), WireGuard, and everything that needs the Pi (Phase 0).
 - **No voice yet**, which comes in Phase 3.
@@ -254,6 +254,7 @@ works as one coherent design.
 | Phase 1 software | LM Studio backend, `atlas-hostd` client, Wake-on-LAN and the wake flow, local grammar for time/date/wake/sleep | **Merged**; not yet run against the real desktop |
 | Phase 2 server | `atlas-ui`: HTTPS, device pairing, step-up PIN, privacy mode, the core control socket | **Merged**; the kiosk on the Pi is still to do |
 | ARM64 VM | Debian 13 VM on the Mac standing in for the Pi: Python 3.13, provisioning, deploy, PT-1, power cuts | **Running**; results in [pi-verification.md](docs/runbooks/pi-verification.md) |
+| Pi bring-up | From a blank card to provisioning: card layout, then `base-os.sh` for fewer card writes, key-only SSH, a pass/fail check and the hardware inventory | **Ready**, waiting for the microSD cards; [pi-bringup.md](docs/runbooks/pi-bringup.md) |
 
 Every phase ends with an ADR and recorded benchmarks.
 

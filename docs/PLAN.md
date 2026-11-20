@@ -407,7 +407,7 @@ If interrupting fails, wake-word detection is muted while ATLAS speaks, and you 
 | 3. data (ext4) | `/var/lib/atlas`: config, credentials, memory DB, queue, audit, and ATLAS code as versioned releases in `releases/` (rev 2.6, so deploys don't need the overlay turned off) | Writable, `noatime,commit=60` |
 
 - **Card:** a high-endurance or industrial (pSLC) card of 64 GB or more. Keep a **spare card pre-imaged** with the golden image (No verified source found for specific endurance ratings; compare vendor TBW specs at purchase).
-- **Upgrades:** done in a maintenance window by temporarily disabling the overlay (`raspi-config nonint disable_overlayfs`, reboot, upgrade, re-enable) [S21].
+- **Upgrades:** done in a maintenance window by temporarily disabling the overlay (reboot, upgrade, re-enable) [S21]. The overlay must be `overlayroot=tmpfs:recurse=0`, or it also covers the data partition; raspi-config's switch writes plain `overlayroot=tmpfs` and can't remove the `recurse=0` form, so the commands are in [docs/runbooks/pi-bringup.md](runbooks/pi-bringup.md) §11 (checked against raspi-config 20261026+2, 2026-11-20).
 - **Write budget:** the microSD budget in §3.5 is a **hard limit** that raises an alarm.
 
 The rev 1 SSD recommendation (S1) remains the upgrade path if the card wears out or corruption appears.
