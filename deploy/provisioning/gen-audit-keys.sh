@@ -6,8 +6,8 @@
 #
 # Keys are created in memory/pipes and stored encrypted by store-credential.sh; nothing is written in clear, and the
 # private key never leaves the Pi. After the audit service first starts it writes the PUBLIC key to
-# /var/lib/atlas/audit/checkpoint.pub: copy that file (and later each checkpoints.jsonl) off the Pi so verification does
-# not depend on files an attacker on the Pi could also replace (docs/runbooks/audit.md).
+# /var/lib/atlas/audit/checkpoint.pub: copy that file and the genesis hash (and later each checkpoints.jsonl) off the Pi
+# so verification does not depend on files an attacker on the Pi could also replace (docs/runbooks/audit.md).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,4 +18,4 @@ command -v openssl >/dev/null || die "openssl is required"
 
 openssl genpkey -algorithm ed25519 | "$here/store-credential.sh" atlas-audit audit-checkpoint-key
 openssl rand 32 | "$here/store-credential.sh" atlas-audit audit-segment-master-key
-log "audit credentials stored. Start the service, then export checkpoint.pub off the Pi."
+log "audit credentials stored. Start the service, then record checkpoint.pub and the genesis hash off the Pi."

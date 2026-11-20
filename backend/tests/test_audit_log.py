@@ -501,7 +501,7 @@ def test_purged_anchor_must_match(make_log: MakeLog, clock: Clock) -> None:
 
 def test_cli_verify_exit_codes(chain: AuditLog, capsys: pytest.CaptureFixture[str]) -> None:
     assert audit_cli(["verify", str(chain.data_dir)]) == 0
-    assert "OK:" in capsys.readouterr().out
+    assert "UNANCHORED:" in capsys.readouterr().out  # verified, but no off-box --expect-head (G1)
     path = only_segment(chain)
     records = segment_lines(path)
     records[2]["context"] = "unattended"

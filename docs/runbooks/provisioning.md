@@ -17,6 +17,7 @@ Scope: users and groups, `/var/lib/atlas` layout, systemd units, nftables, the r
 4. It creates `/etc/atlas/nftables-site.nft` from the placeholder example and **stops short of loading the firewall** while that file is unchanged. Edit it (LAN CIDR and broadcast, LAN DNS and NTP, admin IP, desktop LAN IP), then run the script again. It validates the ruleset with `nft -c` before `systemctl enable --now nftables`.
 5. Store credentials on the Pi only. For audit: `sudo ./gen-audit-keys.sh`. For the others, as their phases arrive: `printf %s "$SECRET" | sudo ./store-credential.sh atlas-market twelvedata-api-key` (only credential names that the service's unit loads are accepted).
 6. Deploy a release ([deploy.md](deploy.md)), then `sudo systemctl start atlas-audit.socket atlas-egress.service`.
+   Then record the audit trust anchors off the Pi (G1, [audit.md](audit.md#off-box-anchor-do-this)): copy `/var/lib/atlas/audit/checkpoint.pub`, and note the `genesis` hash that `python -m atlas.audit verify /var/lib/atlas/audit` prints. Keep both where the Pi cannot write.
 7. Re-enable the overlay. Confirm what survives a reboot: `/var/lib/atlas` (data partition) yes; edits under `/etc` only if the overlay was off while you made them.
 
 ## What the script does (all idempotent)

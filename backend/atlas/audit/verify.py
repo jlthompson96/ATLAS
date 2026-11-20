@@ -12,6 +12,11 @@ Trust rules (review F1). Nothing unsigned vouches for anything:
   to the purge record, and through it to ``anchor_hash``. ``purge_segments`` signs one immediately.)
 * An ``expect_head``, or a sidecar entry, that predates the surviving chain is an error unless such a
   covered purge accounts for that seq range.
+* The writer signs a checkpoint right after genesis (known issue G1), so with a trusted key
+  (``require_checkpoint``, the CLI's ``--pubkey``) a chain with no verified checkpoint is an error: it is a
+  fresh chain written without the key. ``expect_genesis`` (recorded off-box at provisioning) catches a
+  replaced chain even when the key next to it was replaced too. Neither catches a rollback to a genuine
+  prefix; only ``expect_head`` does, and a report without one is ``anchored == False``.
 * Records after the last verified checkpoint are counted and reported; more than ``max_unsigned_records``
   of them is an error because the writer would have signed a checkpoint by then. Within that bound they
   are the live tail, which an attacker without an off-box anchor can still rewrite or drop
@@ -65,6 +70,8 @@ class VerifyReport:
     checkpoints_verified: int = 0
     records_after_last_checkpoint: int = 0
     outcome_unknown: list[OutcomeUnknown] = field(default_factory=list)
+    genesis_hash: str | None = None  # set when the chain still starts at seq 0
+    anchored: bool = False  # an off-box expect_head was checked (truncation and rollback are covered)
 
     @property
     def ok(self) -> bool:
@@ -162,8 +169,10 @@ def verify_dir(
     expect_head: tuple[int, str] | None = None,
     *,
     max_unsigned_records: int = DEFAULT_MAX_UNSIGNED_RECORDS,
+    expect_genesis: str | None = None,
+    require_checkpoint: bool = False,
 ) -> VerifyReport:
-    report = VerifyReport()
+    report = VerifyReport(anchored=expect_head is not None)
     if public_key is None:
         key_path = data_dir / PUBLIC_KEY_FILE
         try:
@@ -248,6 +257,21 @@ def verify_dir(
             )
     elif first["prev_hash"] != ZERO_HASH:
         report.errors.append("genesis prev_hash is not 64 zeros")
+    else:
+        report.genesis_hash = first["hash"]
+    if expect_genesis is not None:
+        if first["seq"] != 0:
+            report.warnings.append(
+                "the genesis record has been purged: --expect-genesis is not checked directly; "
+                "the signed purge anchor stands in for it (use --pubkey)"
+            )
+        elif first["hash"] != expect_genesis:
+            report.errors.append("genesis record differs from the expected off-box genesis hash: log replaced")
+    if require_checkpoint and report.checkpoints_verified == 0:
+        report.errors.append(
+            "no checkpoint verifies with the trusted key: the writer signs one right after genesis, "
+            "so this chain was written without the key (forged or replaced log)"
+        )
 
     _check_tail(report, records, last_cp_record, max_unsigned_records)
     _check_sidecar(data_dir, report, chain_checkpoints, hashes, covered, records, max_unsigned_records)
