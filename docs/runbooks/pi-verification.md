@@ -20,8 +20,9 @@ A disposable clone of the VM (`limactl clone atlas atlas-test`) was provisioned 
 | `LoadCredentialEncrypted` (host key, no TPM) | Works. Before `gen-audit-keys.sh` the service fails at step CREDENTIALS, as expected. |
 | `CAP_LINUX_IMMUTABLE` with `NoNewPrivileges=yes`; `chattr` under `SystemCallFilter=@system-service`; `MemoryDenyWriteExecute=yes` with `cryptography` | All work: the active segment and `checkpoints.jsonl` show `a`, and root's `echo >` into the segment gets `Operation not permitted`. |
 | `verify` with `--pubkey` | `UNANCHORED`, all checkpoints verified, genesis printed (G1). |
-| N4 clean stop | `systemctl stop atlas-audit` returns in 0.03 s and writes its stop records. Asyncio logs a harmless unlink error (V4). |
-| Release install, activate, rollback, list | Work. The first deploy was refused because of macOS tar metadata (V2, fixed). `activate` doesn't catch a crash-looping unit (V5). |
+| N4 clean stop | `systemctl stop atlas-audit` returns in 0.03 s and writes its stop records. Asyncio logs a harmless unlink error (V4, since fixed). |
+| Release install, activate, rollback, list | Work. The first deploy was refused because of macOS tar metadata (V2, fixed). `activate` didn't catch a crash-looping unit (V5, since fixed). |
+| V-fix re-run (branch `fix/vm-findings`, release `d710ba98feb4`) | V1: `provision-pi.sh` refuses with `systemd-resolved` active and with the stub `resolv.conf`, and passes with `nameserver 192.168.5.2`. V4: `systemctl stop atlas-audit` logs no `PermissionError` and `/run/atlas/audit.sock` stays. V5: a throwaway release whose `serve` exits 2 s after start is reported `unhealthy: a unit restarted within 10s` (`atlas-audit` restarts 0 → 2) and rolled back automatically; `deploy.sh` stops without "deployed", and the restored release keeps a stable restart count. Backend on 3.13.5: 1330 passed, 2 skipped; `shellcheck -x --source-path=SCRIPTDIR` clean. |
 | FI-3 (power cut) | **3 hard VM stops** (`limactl stop -f`) under `fi3-audit-load.sh`. Every boot: audit active, the chain verifies, no warnings, no `OUTCOME_UNKNOWN`, no fsynced record lost. The full test is 20 cuts on the Pi's card. |
 
 Not done in the VM: segment rotation and sealing (`+i`, needs a day or size rollover), purge on real ext4, the IPv6 checks (the VM network has no IPv6), WireGuard and the D1 mark, and the MDWE measurements for services that don't exist yet.
@@ -75,7 +76,7 @@ Not done in the VM: segment rotation and sealing (`+i`, needs a day or size roll
 
 - [ ] `provision-pi.sh` twice in a row: the second run changes nothing. Real `useradd`, `groupadd`, `install`, `visudo -cf`, `systemd-tmpfiles`.
 - [x] `shellcheck deploy/provisioning/*.sh` is clean (shellcheck is not installed on the Mac; the structure test skips itself there). **VM 2026-11-20:** clean with `shellcheck -x --source-path=SCRIPTDIR` (0.10.0) after the S1 fixes; `test_shellcheck_if_available` passes.
-- [ ] `deploy.sh` end to end against the VM: upload, install, activate, health check, deliberate failure (break a unit) triggers automatic rollback, `rollback`, `prune` keeps 3. `python3 -m venv` and offline `pip install --require-hashes` from the shipped wheels.
+- [ ] `deploy.sh` end to end against the VM: upload, install, activate, health check, deliberate failure (break a unit) triggers automatic rollback, `rollback`, `prune` keeps 3. `python3 -m venv` and offline `pip install --require-hashes` from the shipped wheels. **VM 2026-11-20:** upload, install, activate, `rollback` and the offline venv build work; a deliberately crash-looping release is caught by the health check and rolled back automatically (V5). Prune and the Pi still to do.
 - [ ] Re-lock inside the VM: `backend/scripts/relock-pi.sh audit cryptography==47.0.0 cffi==2.1.1 pycparser==3.12` yields identical hashes to `backend/requirements-audit.lock`.
 - [ ] `exposure-inventory.sh` output matches the PLAN 2.7 table (PT-11).
 - [ ] A deploy's write volume (for B10).
