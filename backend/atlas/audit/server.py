@@ -42,6 +42,7 @@ MAX_CONNECTIONS_PER_ACTOR: Final = 8  # one service must not use up the global l
 # watch; the free-space floor in AuditLog.append stops it before the card fills.
 APPEND_RATE_PER_S: Final = 5.0
 APPEND_BURST: Final = 50.0
+CLOSE_GRACE_S: Final = 5.0  # bound on waiting for handlers after their connections were closed (TimeoutStopSec is 15)
 
 
 def _reply(**fields: Any) -> bytes:
@@ -80,6 +81,8 @@ class AuditServer:
         self._connections = 0
         self._server: asyncio.Server | None = None
         self._ticker: asyncio.Task[None] | None = None
+        self._writers: set[asyncio.StreamWriter] = set()  # every open client connection, so close() can drop them
+        self._closing = False  # set under the lock: no append may land after the final stop records
 
     # ---- listening ---------------------------------------------------------------------------------
 
@@ -98,14 +101,34 @@ class AuditServer:
     def _start_ticker(self) -> None:
         self._ticker = asyncio.create_task(self._tick_loop())
 
-    async def close(self) -> None:
+    async def close(self, on_stop: Callable[[], object] | None = None, *, grace_s: float = CLOSE_GRACE_S) -> None:
+        """Stop accepting, run ``on_stop`` (the final records) under the append lock, then drop every client.
+
+        Known issue N4: atlas-egress always holds an idle pooled connection, and ``Server.wait_closed`` waits for open
+        connections, so the old order (wait first, then write the stop record) blocked past systemd's
+        ``TimeoutStopSec`` and ended in SIGKILL: no stop record and no clean-stop checkpoint. Now the final records are
+        written first, client connections are closed by us, and the wait is bounded. Appends that reach the lock after
+        ``on_stop`` are refused (``AUDIT_UNAVAILABLE``), so nothing unsigned follows the clean-stop checkpoint.
+        """
+        if self._server is not None:
+            self._server.close()  # no new connections
+        async with self._lock:  # waits for an in-flight append or housekeeping tick to finish its thread
+            self._closing = True
+            if self._ticker is not None:
+                self._ticker.cancel()
         if self._ticker is not None:
-            self._ticker.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._ticker
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
+        try:
+            if on_stop is not None:
+                async with self._lock:
+                    await asyncio.to_thread(on_stop)
+        finally:
+            for writer in list(self._writers):
+                writer.close()
+            if self._server is not None:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._server.wait_closed(), grace_s)
 
     async def _tick_loop(self) -> None:
         while True:
@@ -123,13 +146,17 @@ class AuditServer:
     # ---- connections -------------------------------------------------------------------------------
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._writers.add(writer)
         try:
+            if self._closing:
+                return
             await self._serve(reader, writer)
         except (ConnectionError, asyncio.IncompleteReadError, TimeoutError):
             pass
         except Exception:
             log.exception("unexpected error serving a connection")
         finally:
+            self._writers.discard(writer)
             with contextlib.suppress(Exception):
                 writer.close()
                 await writer.wait_closed()
@@ -189,6 +216,8 @@ class AuditServer:
                 if not self._take_token(actor):
                     raise SubmissionRejected("RATE_LIMITED")
                 async with self._lock:
+                    if self._closing:
+                        raise SubmissionRejected("AUDIT_UNAVAILABLE", "shutting down")
                     done = await asyncio.to_thread(self._log.append, actor, record)
                 return _reply(ok=True, seq=done.seq, hash=done.hash, durable=done.durable)
             if op == "outcome_unknown" and set(request) == {"op"}:

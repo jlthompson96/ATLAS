@@ -25,7 +25,7 @@ from pathlib import Path
 from atlas.audit.attrs import LinuxChattr, NoAttributes, SegmentAttributes, probe_linux_chattr
 from atlas.audit.client import DEFAULT_SOCKET, AuditClient, AuditError
 from atlas.audit.keys import KeyFileError, load_private_key, load_public_key
-from atlas.audit.log import AuditConfig, AuditCorrupt, AuditLog
+from atlas.audit.log import AuditConfig, AuditCorrupt, AuditLog, AuditUnavailable
 from atlas.audit.peercred import KernelPeerCredentials, PasswdDirectory
 from atlas.audit.server import AuditServer, listen_fds_socket
 from atlas.audit.verify import verify_dir
@@ -154,14 +154,25 @@ async def _serve() -> int:
     stopper = asyncio.create_task(stop.wait())
     failed = asyncio.create_task(server.fatal.wait())
     await asyncio.wait({stopper, failed}, return_when=asyncio.FIRST_COMPLETED)
-    await server.close()
-    if server.fatal.is_set() or audit_log.failed:
+    for task in (stopper, failed):
+        task.cancel()
+    healthy = not (server.fatal.is_set() or audit_log.failed)
+
+    def final_records() -> None:
+        audit_log.append_system("service_stop")
+        audit_log.checkpoint_if_needed()  # sign the tail so a clean stop leaves nothing unsigned
+
+    # The stop record and checkpoint are written BEFORE client connections are dropped and waited for (known issue
+    # N4): an idle pooled client must not hold shutdown past TimeoutStopSec into a SIGKILL.
+    try:
+        await server.close(on_stop=final_records if healthy else None)
+    except (AuditUnavailable, OSError):
+        healthy = False
+    if not healthy or audit_log.failed:
         # Poisoned by an I/O error: exit non-zero (systemd restarts us) and let startup re-validate the log.
         print("audit log failed; exiting so systemd restarts and re-validates it", file=sys.stderr)
         audit_log.close()
         return 1
-    audit_log.append_system("service_stop")
-    audit_log.checkpoint_if_needed()  # sign the tail so a clean stop leaves nothing unsigned
     audit_log.close()
     return 0
 

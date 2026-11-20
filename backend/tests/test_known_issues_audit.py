@@ -5,8 +5,16 @@ The reviewer's reproduction scripts were lost; these rebuild the scenarios they 
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -14,13 +22,18 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from atlas.audit.__main__ import main as audit_cli
+from atlas.audit.client import AuditClient, AuditError
 from atlas.audit.jcs import canonicalize
 from atlas.audit.keys import load_public_key, public_key_b64
 from atlas.audit.log import AuditConfig, AuditLog
 from atlas.audit.record import ZERO_HASH, record_hash
 from atlas.audit.segments import CHECKPOINT_SIDECAR, list_segments
 from atlas.audit.verify import verify_dir
-from tests.conftest import T0, Clock, tool_call
+from tests.conftest import T0, Clock, egress_body, tool_call
+from tests.test_audit_cli import BACKEND, environment, pem
+from tests.test_audit_server import make_server, run, sock_path
+
+__all__ = ["sock_path"]  # a pytest fixture, imported so the N4 tests can use it
 
 MakeLog = Callable[..., AuditLog]
 
@@ -221,3 +234,139 @@ def test_g1_verify_without_an_off_box_head_is_unanchored(make_log: MakeLog, caps
     anchor = f"{report.last_seq}:{report.head_hash}"
     assert audit_cli(["verify", str(log.data_dir), "--pubkey", str(pubfile), "--expect-head", anchor]) == 0
     assert capsys.readouterr().out.splitlines()[-1].startswith("OK:")
+
+
+# --- N4: an idle pooled client must not block shutdown ----------------------------------------------------------------
+
+
+def test_n4_an_idle_pooled_client_does_not_block_server_close(make_log: MakeLog, sock_path: Path) -> None:
+    async def scenario() -> None:
+        log = make_log()
+        server, creds = make_server(log)
+        creds.uid = 1003  # atlas-egress, which always keeps one pooled connection open
+        await server.listen_path(sock_path)
+        client = AuditClient(sock_path)
+        await client.append(egress_body())  # the connection now sits idle in the client's pool
+        try:
+            await asyncio.wait_for(server.close(), 3)  # the old code waited for the 300 s idle timeout
+        finally:
+            await client.close()
+            log.close()
+
+    run(scenario())
+
+
+def test_n4_stop_record_and_checkpoint_are_written_before_clients_are_dropped(
+    make_log: MakeLog, sock_path: Path
+) -> None:
+    async def scenario() -> None:
+        log = make_log()
+        server, creds = make_server(log)
+        creds.uid = 1003
+        await server.listen_path(sock_path)
+        client = AuditClient(sock_path)
+        await client.append(egress_body())
+        stopping = threading.Event()
+
+        def on_stop() -> None:
+            stopping.set()
+            time.sleep(0.3)  # a slow fsync: a client append arrives meanwhile and must not land after the checkpoint
+            log.append_system("service_stop")
+            log.checkpoint_if_needed()
+
+        async def late_append() -> str:
+            await asyncio.to_thread(stopping.wait, 3)
+            try:
+                await client.append(egress_body())
+            except AuditError as exc:
+                return exc.code
+            return "APPENDED"
+
+        late = asyncio.create_task(late_append())
+        await asyncio.wait_for(server.close(on_stop=on_stop), 3)
+        assert await late == "AUDIT_UNAVAILABLE"
+        await client.close()
+        log.close()
+        assert kinds(log)[-2:] == ["system", "checkpoint"]
+        assert verify_dir(log.data_dir).records_after_last_checkpoint == 0
+
+    run(scenario())
+
+
+SERVE_WITH_FAKE_PEERS = """
+import sys
+import atlas.audit.__main__ as cli
+
+class Creds:
+    def peer_uid(self, sock):
+        return 4242
+
+class Users:
+    def user_name(self, uid):
+        return "atlas-egress"  # every peer is the egress service, as on the Pi
+
+cli.KernelPeerCredentials = Creds
+cli.PasswdDirectory = Users
+sys.exit(cli.main(["serve"]))
+"""
+
+
+def test_n4_sigterm_with_an_idle_egress_connection_stops_cleanly_and_quickly() -> None:
+    with tempfile.TemporaryDirectory(prefix="atl") as tmp:
+        root = Path(tmp)
+        (root / "creds").mkdir()
+        (root / "creds" / "audit-checkpoint-key").write_bytes(pem(Ed25519PrivateKey.generate()))
+        sock_path = root / "a.sock"
+        proc = subprocess.Popen(  # noqa: S603  (our own module, fixed argv)
+            [sys.executable, "-c", SERVE_WITH_FAKE_PEERS],
+            env=environment(root, str(sock_path)),
+            cwd=BACKEND,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while not sock_path.exists():
+                assert proc.poll() is None, proc.stderr.read() if proc.stderr else b""
+                assert time.monotonic() < deadline, "server did not start"
+                time.sleep(0.05)
+            with socket.socket(socket.AF_UNIX) as pooled:
+                pooled.settimeout(5)
+                pooled.connect(str(sock_path))
+                pooled.sendall(json.dumps({"op": "append", "record": egress_body()}).encode() + b"\n")
+                assert json.loads(pooled.makefile().readline())["ok"] is True
+                started = time.monotonic()
+                proc.send_signal(signal.SIGTERM)  # the pooled connection stays open and idle
+                assert proc.wait(timeout=8) == 0  # systemd's TimeoutStopSec is 15 s; the old code waited 300 s
+                assert time.monotonic() - started < 5
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if proc.stderr is not None:
+                proc.stderr.close()
+        report = verify_dir(root / "audit")
+        assert report.ok, report.errors
+        assert report.records_after_last_checkpoint == 0  # the clean-stop checkpoint was written
+        last = [json.loads(x) for _, p in list_segments(root / "audit") for x in p.read_text().splitlines()][-2:]
+        assert [r["kind"] for r in last] == ["system", "checkpoint"]
+        assert last[0]["system"]["event"] == "service_stop"
+
+
+def test_n4_after_an_io_failure_the_server_closes_without_waiting_for_idle_clients(
+    make_log: MakeLog, sock_path: Path
+) -> None:
+    async def scenario() -> None:
+        log = make_log()
+        server, creds = make_server(log)
+        creds.uid = 1001
+        await server.listen_path(sock_path)
+        client = AuditClient(sock_path)
+        await client.append(tool_call())
+        server.fatal.set()  # as after a failed fsync: no stop record, just exit so systemd restarts us
+        try:
+            await asyncio.wait_for(server.close(), 3)
+        finally:
+            await client.close()
+            log.close()
+
+    run(scenario())
