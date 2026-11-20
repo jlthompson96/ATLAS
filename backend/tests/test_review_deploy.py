@@ -187,10 +187,14 @@ def test_f2_provisioning_installs_the_root_owned_service_list() -> None:
 
 
 def test_f8_a_changed_ruleset_is_validated_then_applied_with_a_rollback_copy() -> None:
-    text = PROVISION.read_text()
-    check = text.index("nft -c -f /etc/atlas/atlas.nft.new")
+    assert 'install_firewall /etc/atlas "$deploy_dir/nftables"' in PROVISION.read_text()
+    lib = (DEPLOY / "provisioning" / "lib.sh").read_text()
+    text = lib.split("install_firewall() {", 1)[
+        1
+    ]  # the step moved into lib.sh with D2 (behaviour: test_known_issues_deploy)
+    check = text.index('nft -c -f "$etc/atlas.nft.new"')
     prev = text.index("atlas.nft.prev")
-    move = text.index("mv -f /etc/atlas/atlas.nft.new /etc/atlas/atlas.nft")
+    move = text.index('mv -f "$etc/atlas.nft.new" "$etc/atlas.nft"')
     reload_ = text.index("systemctl reload nftables.service")
     assert check < move < reload_ and prev < move  # validate first; never replace with an unchecked file
     assert "nft_changed" in text

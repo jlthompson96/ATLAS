@@ -43,6 +43,14 @@ esac
 case "$ATLAS_LAN_PREFIX6" in
   *[!0-9a-fA-F:/]*) die "ATLAS_LAN_PREFIX6 must be a plain IPv6 prefix such as 2001:db8::/64" ;;
 esac
+# The default is the RFC 3849 placeholder; with it the proxy's IPv6 LAN exclusion is a no-op (known issue D3).
+if printf '%s\n' "$ATLAS_LAN_PREFIX6" | has_ipv6_placeholder -; then
+  if [ "$DRY_RUN" = "1" ]; then
+    log "WARNING: ATLAS_LAN_PREFIX6 is the 2001:db8:: placeholder; a real run refuses it"
+  else
+    die "ATLAS_LAN_PREFIX6 is the RFC 3849 placeholder: set your LAN's global IPv6 prefix, or fd00::/8 if the LAN has none"
+  fi
+fi
 
 log "== groups and users"
 ensure_group atlas-audit-clients # may write to /run/atlas/audit.sock
@@ -93,44 +101,12 @@ else
 fi
 
 log "== firewall (nftables)"
-site=/etc/atlas/nftables-site.nft
-if [ ! -f "$site" ]; then
-  log "create  $site from the placeholder example: EDIT IT, then re-run"
-  run install -m 640 -o root -g root "$deploy_dir/nftables/site.nft.example" "$site"
-fi
 write_file /etc/nftables.conf 755 '#!/usr/sbin/nft -f
 include "/etc/atlas/atlas.nft"'
-firewall_ready=1
-if [ "$DRY_RUN" != "1" ] && cmp -s "$site" "$deploy_dir/nftables/site.nft.example"; then
-  log "WARNING: $site still holds the placeholder addresses; the firewall is NOT loaded or enabled yet."
-  firewall_ready=0
-fi
-if [ "$firewall_ready" = "0" ]; then
-  install_file "$deploy_dir/nftables/atlas.nft" /etc/atlas/atlas.nft 644
-else
-  # A changed ruleset is validated BEFORE it replaces the installed one (a bad file must never be what the next boot
-  # loads), the last known-good one is kept for rollback, and the new one is applied now (review F8).
-  nft_changed=0
-  if [ -f /etc/atlas/atlas.nft ] && ! cmp -s "$deploy_dir/nftables/atlas.nft" /etc/atlas/atlas.nft; then
-    nft_changed=1
-  fi
-  if [ ! -f /etc/atlas/atlas.nft ] || [ "$nft_changed" = "1" ]; then
-    run install -m 644 -o root -g root "$deploy_dir/nftables/atlas.nft" /etc/atlas/atlas.nft.new
-    run nft -c -f /etc/atlas/atlas.nft.new
-    if [ "$nft_changed" = "1" ]; then
-      run cp -p /etc/atlas/atlas.nft /etc/atlas/atlas.nft.prev
-    fi
-    run mv -f /etc/atlas/atlas.nft.new /etc/atlas/atlas.nft
-  else
-    log "ok      /etc/atlas/atlas.nft"
-  fi
-  run nft -c -f /etc/atlas/atlas.nft
-  run systemctl enable --now nftables.service
-  if [ "$nft_changed" = "1" ]; then
-    log "ruleset changed: reloading nftables (previous ruleset kept as /etc/atlas/atlas.nft.prev)"
-    run systemctl reload nftables.service
-  fi
-fi
+# atlas.nft and the site file are one ruleset: a change to either is validated, then reloaded (lib.sh, known issue D2).
+# The site file is created from the placeholder example on the first run; the firewall is not loaded until it is edited,
+# and an edited site file that still holds the 2001:db8:: placeholder is refused (known issue D3).
+install_firewall /etc/atlas "$deploy_dir/nftables"
 
 log "== enable units"
 run systemctl daemon-reload

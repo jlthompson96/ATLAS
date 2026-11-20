@@ -8,6 +8,7 @@ unprivileged on throwaway paths; the real commands are checked in the ARM64 VM (
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,7 +16,11 @@ from typing import Any
 
 import pytest
 
-from tests.test_review_deploy import GOOD, bash, make_tar
+from tests.test_deploy_structure import DEPLOY
+from tests.test_review_deploy import GOOD, REPO, bash, make_tar
+
+LIB = DEPLOY / "provisioning" / "lib.sh"
+PROVISION = DEPLOY / "provisioning" / "provision-pi.sh"
 
 VERSIONS = ["20261101T000000Z-aaaaaaa", "20261102T000000Z-bbbbbbb", "20261103T000000Z-ccccccc"]
 
@@ -160,3 +165,152 @@ def test_n5_the_install_reads_only_the_copy() -> None:
     after_copy = body.split('>"$tarball"', 1)[1]
     assert "$incoming" not in after_copy.split('rm -f "$incoming"')[0]  # nothing reads incoming/ after the copy
     assert "trap cleanup_install EXIT" in body
+
+
+# --- D2 / D3: the provisioning firewall step ---------------------------------------------------------------------------
+
+EDITED_SITE_VALUES = {  # obviously fake, but no longer the example file and no RFC 3849 prefix
+    "192.0.2.1 ": "198.51.100.1 ",
+    "2001:db8:1234:5600::/64": "fd12:3456:789a:1::/64",
+}
+
+
+def firewall_dirs(tmp_path: Path) -> tuple[Path, Path]:
+    """A copy of deploy/nftables (SRC) and an /etc/atlas stand-in (ETC) holding an owner-edited site file."""
+    src, etc = tmp_path / "src", tmp_path / "etc"
+    src.mkdir()
+    etc.mkdir()
+    for name in ("atlas.nft", "site.nft.example"):
+        shutil.copy(DEPLOY / "nftables" / name, src / name)
+    site = (src / "site.nft.example").read_text()
+    for old, new in EDITED_SITE_VALUES.items():
+        site = site.replace(old, new)
+    (etc / "nftables-site.nft").write_text(site)
+    return src, etc
+
+
+def firewall(tmp_path: Path, src: Path, etc: Path) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run lib.sh's install_firewall for real, as root would, except that nft and systemctl are recorded, not run, and
+    install's owner flags are dropped. Returns the result and the recorded nft/systemctl calls."""
+    calls = tmp_path / "calls.log"
+    calls.write_text("")
+    snippet = f"""
+set -euo pipefail
+source "{LIB}"
+DRY_RUN=0
+install() {{
+  local a=()
+  while [ $# -gt 0 ]; do case "$1" in -o | -g) shift 2 ;; -D) shift ;; *) a+=("$1"); shift ;; esac; done
+  command install "${{a[@]}}"
+}}
+nft() {{ echo "nft $*" >>"{calls}"; if [ -n "${{NFT_FAIL_ON:-}}" ] && grep -q "$NFT_FAIL_ON" "{etc}/nftables-site.nft"; then return 1; fi; }}
+systemctl() {{ echo "systemctl $*" >>"{calls}"; }}
+install_firewall "{etc}" "{src}"
+"""
+    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "NFT_FAIL_ON": "BROKEN"}
+    result = subprocess.run(["/bin/bash", "-c", snippet], capture_output=True, text=True, check=False, env=env)  # noqa: S603
+    return result, calls.read_text().splitlines()
+
+
+def test_d2_a_site_file_only_change_is_validated_and_reloaded(tmp_path: Path) -> None:
+    src, etc = firewall_dirs(tmp_path)
+    first, calls = firewall(tmp_path, src, etc)
+    assert first.returncode == 0, first.stderr
+    assert f"nft -c -f {etc}/atlas.nft.new" in calls and "systemctl enable --now nftables.service" in calls
+
+    again, calls = firewall(tmp_path, src, etc)  # nothing changed: nothing validated anew, nothing reloaded
+    assert again.returncode == 0, again.stderr
+    assert f"nft -c -f {etc}/atlas.nft.new" not in calls and "systemctl reload nftables.service" not in calls
+
+    before = (etc / "nftables-site.nft").read_text()
+    (etc / "nftables-site.nft").write_text(before.replace("198.51.100.1 ", "198.51.100.53 "))  # a new LAN resolver
+    edited, calls = firewall(tmp_path, src, etc)  # atlas.nft itself is unchanged
+    assert edited.returncode == 0, edited.stderr
+    validate, reload_ = calls.index(f"nft -c -f {etc}/atlas.nft.new"), calls.index("systemctl reload nftables.service")
+    assert validate < reload_  # validated, then applied
+    assert (etc / "nftables-site.nft.prev").read_text() == before  # the last known-good site file, for rollback
+    assert "198.51.100.53" in (etc / "nftables-site.nft.applied").read_text()
+
+
+def test_d2_an_invalid_site_change_is_not_reloaded_and_stays_pending(tmp_path: Path) -> None:
+    src, etc = firewall_dirs(tmp_path)
+    assert firewall(tmp_path, src, etc)[0].returncode == 0
+    good = (etc / "nftables-site.nft").read_text()
+    (etc / "nftables-site.nft").write_text(good + "BROKEN\n")
+    result, calls = firewall(tmp_path, src, etc)
+    assert result.returncode != 0
+    assert "systemctl reload nftables.service" not in calls
+    assert (etc / "nftables-site.nft.applied").read_text() == good  # retried on the next run
+    assert (etc / "atlas.nft").read_text() == (src / "atlas.nft").read_text()  # the installed ruleset is untouched
+
+
+def test_d3_an_edited_site_file_with_the_ipv6_placeholder_is_refused(tmp_path: Path) -> None:
+    src, etc = firewall_dirs(tmp_path)
+    site = (etc / "nftables-site.nft").read_text().replace("fd12:3456:789a:1::/64", "2001:db8:1234:5600::/64")
+    (etc / "nftables-site.nft").write_text(site)
+    result, calls = firewall(tmp_path, src, etc)
+    assert result.returncode != 0
+    assert "2001:db8::" in result.stderr and "LAN_PREFIX6" in result.stderr
+    assert calls == []  # nothing validated, enabled or reloaded
+    assert not (etc / "atlas.nft").exists()
+
+
+def test_d3_the_untouched_example_still_only_postpones_the_firewall(tmp_path: Path) -> None:
+    src, etc = firewall_dirs(tmp_path)
+    shutil.copy(src / "site.nft.example", etc / "nftables-site.nft")  # first run: the owner has not edited it yet
+    result, calls = firewall(tmp_path, src, etc)
+    assert result.returncode == 0, result.stderr
+    assert "NOT loaded" in result.stderr and calls == []
+
+
+@pytest.mark.parametrize(
+    ("text", "placeholder"),
+    [
+        ("define LAN_PREFIX6 = 2001:db8:1234:5600::/64\n", True),
+        ("define LAN_PREFIX6 = 2001:DB8::/64\n", True),
+        ("define LAN_PREFIX6 = 2001:0db8:1::/48\n", True),
+        ("# e.g. 2001:db8::/64 in the documentation\ndefine LAN_PREFIX6 = fd12:3456:789a:1::/64\n", False),
+        ("define LAN_PREFIX6 = fd12:3456:789a:1::/64   # was 2001:db8:1234:5600::/64\n", False),
+        ("define LAN_PREFIX6 = 2001:db9::/64\n", False),
+    ],
+)
+def test_d3_placeholder_detection(tmp_path: Path, text: str, placeholder: bool) -> None:
+    path = tmp_path / "site.nft"
+    path.write_text(text)
+    result = subprocess.run(  # noqa: S603
+        ["/bin/bash", "-c", f'source "{LIB}"; has_ipv6_placeholder "{path}"'], capture_output=True, check=False
+    )
+    assert (result.returncode == 0) is placeholder
+
+
+def test_d3_a_real_run_refuses_the_placeholder_lan_prefix_before_changing_anything(tmp_path: Path) -> None:
+    if os.getuid() == 0:
+        pytest.skip("running as root: this test must never reach the real provisioning steps")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "id").write_text('#!/bin/sh\nif [ "$1" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n')
+    (fake / "id").chmod(0o755)  # looks like root to need_root and user_exists, nothing else
+    result = subprocess.run(  # noqa: S603
+        ["/bin/bash", str(PROVISION)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=REPO,
+        env={"PATH": f"{fake}:/usr/bin:/bin:/usr/sbin:/sbin", "ATLAS_ADMIN_USER": "admin"},
+    )
+    assert result.returncode != 0
+    assert "RFC 3849" in result.stderr and "ATLAS_LAN_PREFIX6" in result.stderr
+    assert "== groups and users" not in result.stderr  # refused before the first step
+
+
+def test_d3_dry_run_only_warns_about_the_placeholder_lan_prefix() -> None:
+    result = subprocess.run(  # noqa: S603
+        ["/bin/bash", str(PROVISION), "--dry-run"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=REPO,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ATLAS_LAN_PREFIX6 is the 2001:db8:: placeholder" in result.stderr
