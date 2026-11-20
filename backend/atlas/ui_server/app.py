@@ -48,12 +48,17 @@ from atlas.ui_server.protocol import Contract, now_ms
 from atlas.ui_server.security import (
     SECURITY_HEADERS,
     FailureLimiter,
+    default_origins,
     host_allowed,
     origin_allowed,
 )
 from atlas.ui_server.session import Session
 
 log = logging.getLogger("atlas.ui")
+# websockets logs every frame (PINs, step-up tokens, passphrases) at DEBUG. Pin this logger above DEBUG so no
+# root-level logging configuration can switch that on.
+WS_LOGGER = logging.getLogger("atlas.ui.websockets")
+WS_LOGGER.setLevel(logging.WARNING)
 Json = dict[str, Any]
 
 WS_PATH: Final = "/ws/events"
@@ -148,6 +153,7 @@ class UiServer:
                     ssl=tls,
                     process_request=self._process_request,
                     server_header=None,
+                    logger=WS_LOGGER,
                     max_size=MAX_WS_BYTES,
                     ping_interval=20,
                     ping_timeout=20,
@@ -155,6 +161,11 @@ class UiServer:
             )
         self._core_task = asyncio.ensure_future(self._core_loop())
         return self._servers[0]
+
+    @property
+    def origins(self) -> frozenset[str]:
+        """Allowed Origins/Hosts, computed from the port actually bound (matters when ``port=0``)."""
+        return default_origins(self.bound_port if self._servers else self.cfg.port, self.cfg.extra_origins)
 
     @property
     def bound_port(self) -> int:
@@ -174,7 +185,7 @@ class UiServer:
     # --- HTTP --------------------------------------------------------------------------------------
 
     def _process_request(self, connection: ServerConnection, request: Request) -> Response | None:
-        origins = self.cfg.allowed_origins
+        origins = self.origins
         headers = request.headers
         if not host_allowed(headers.get("Host"), origins):
             return _text(HTTPStatus.MISDIRECTED_REQUEST, "Unknown host")
@@ -195,7 +206,7 @@ class UiServer:
         headers = request.headers
         if (headers.get("Upgrade") or "").lower() != "websocket":
             return _text(HTTPStatus.UPGRADE_REQUIRED, "Use a WebSocket")
-        if not origin_allowed(headers.get("Origin"), self.cfg.allowed_origins):
+        if not origin_allowed(headers.get("Origin"), self.origins):
             log.warning("refused WebSocket from %s: bad Origin", connection.remote_address)
             return _text(HTTPStatus.FORBIDDEN, "Origin not allowed")
         if self.registry.authenticate_cookie(headers.get("Cookie")) is None:
@@ -206,7 +217,7 @@ class UiServer:
 
     def _pair(self, connection: ServerConnection, request: Request) -> Response:
         headers = request.headers
-        if not origin_allowed(headers.get("Origin"), self.cfg.allowed_origins):
+        if not origin_allowed(headers.get("Origin"), self.origins):
             return _text(HTTPStatus.FORBIDDEN, "Origin not allowed")
         code = headers.get(PAIR_HEADER)
         if code is None:

@@ -253,6 +253,7 @@ class ControlServer:
         self._busy = False
         self._utterance = 0
         self._background: set[asyncio.Task[None]] = set()
+        self._writers: set[asyncio.StreamWriter] = set()
         self._sweeper: asyncio.Task[None] | None = None
 
     # --- lifecycle ---
@@ -272,8 +273,11 @@ class ControlServer:
             self._sweeper.cancel()
         if self._server is not None:
             self._server.close()
+            for writer in list(self._writers):  # wait_closed() waits for open connections: drop them first
+                writer.close()
             with contextlib.suppress(Exception):
                 await self._server.wait_closed()
+            self._server = None
         for task in list(self._background):
             task.cancel()
         await asyncio.gather(*self._background, *([self._sweeper] if self._sweeper else []), return_exceptions=True)
@@ -307,6 +311,7 @@ class ControlServer:
             writer.close()
             return
         allowed = PEER_OPS[peer]
+        self._writers.add(writer)
         outbox: asyncio.Queue[bytes | None] = asyncio.Queue(SUBSCRIBER_QUEUE)
 
         def put(frame: Json) -> None:
@@ -343,6 +348,7 @@ class ControlServer:
         finally:
             if subscribed:
                 self._hub.unsubscribe(deliver)
+            self._writers.discard(writer)
             outbox.put_nowait(None)
             await asyncio.gather(pump_task, return_exceptions=True)
             with contextlib.suppress(Exception):
