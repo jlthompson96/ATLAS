@@ -67,3 +67,18 @@ The running list is in [pi-verification.md](pi-verification.md) and [known-issue
   - The Pi locks (audit, core, executor) reproduce byte-for-byte.
   - `nft -c` on `atlas.nft` with the example site file is OK.
 - **2026-11-20, known-issues fix branch (N1–N5, G1, D2, D3, S1):** ruff, format and mypy clean; backend 1320 passed, 1 skipped (HUD not built); `shellcheck -x` clean, so `test_shellcheck_if_available` passes. The GNU-tar `atlas-release install` tests (N5) run here and skip on the Mac. `nft -c` of a `/tmp` copy of the ruleset with the updated example site file is OK. Note: a worktree's `.git` points at a Mac path, so to test a branch from a worktree, ship `git archive HEAD` into the VM instead of cloning the mount.
+
+## A disposable copy for root-level tests
+
+Provisioning loads a default-deny firewall and changes `/etc`, so run it on a clone and keep `atlas` clean:
+
+```sh
+limactl stop atlas && limactl clone atlas atlas-test && limactl start --tty=false atlas-test
+limactl delete -f atlas-test     # when done
+```
+
+- `limactl shell` reaches the guest over vsock, so the ATLAS firewall doesn't cut it off.
+- To deploy with the real `deploy.sh`, point `ssh`/`scp` at Lima's config (`~/.lima/atlas-test/ssh.config`, host `lima-atlas-test`), for example with wrapper scripts early on `PATH`. Don't edit `~/.ssh/config` for it.
+- Debian's cloud image runs `systemd-resolved`, and the ATLAS firewall blocks its upstream queries (known issue V1). Disable it and point `/etc/resolv.conf` at the gateway (`192.168.5.2`), as Raspberry Pi OS does.
+- `/tmp` is cleared on boot, and a hard stop (`limactl stop -f`, the FI-3 stand-in) loses unsynced writes. `sync` after copying test tools in.
+- 2026-11-20 run: see [pi-verification.md](pi-verification.md#vm-run-2026-11-20).

@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -605,3 +606,35 @@ def test_services_md_family_table_was_parsed() -> None:
     assert FAMILIES["atlas-kiosk"][0] == {"AF_INET"}
     assert FAMILIES["atlas-core"][0] == {"AF_INET"}
     assert set(FAMILIES) == {"atlas-egress", "atlas-ui", "atlas-core", "atlas-kiosk"} | set(md_proxy_ports())
+
+
+def _apple_double(tar_path: Path) -> list[str]:
+    # macOS `tar -t` hides AppleDouble entries when listing; tarfile shows what is really in the archive.
+    with tarfile.open(tar_path) as tf:
+        return [m.name for m in tf.getmembers() if Path(m.name).name.startswith("._")]
+
+
+def test_deploy_tarball_carries_no_macos_metadata(tmp_path: Path) -> None:
+    """macOS tar adds AppleDouble ``._*`` entries, which atlas-release refuses (found in the ARM64 VM, 2026-11-20)."""
+    text = (DEPLOY / "provisioning" / "deploy.sh").read_text(encoding="utf-8")
+    assert "COPYFILE_DISABLE=1 tar" in text and "--no-mac-metadata" in text and "--no-xattrs" in text
+    tar, xattr = shutil.which("tar"), shutil.which("xattr")
+    if tar is None or xattr is None:
+        pytest.skip("needs macOS bsdtar and xattr")
+    version = subprocess.run([tar, "--version"], capture_output=True, text=True, check=False).stdout  # noqa: S603
+    if "bsdtar" not in version:
+        pytest.skip("needs macOS bsdtar and xattr")
+    stage = tmp_path / "stage"
+    (stage / "backend").mkdir(parents=True)
+    (stage / "backend" / "x.py").write_text("x = 1\n", encoding="utf-8")
+    for target in (stage, stage / "backend" / "x.py"):
+        subprocess.run([xattr, "-w", "com.apple.metadata:atlas-test", "1", str(target)], check=True)  # noqa: S603
+    env = {k: v for k, v in os.environ.items() if k != "COPYFILE_DISABLE"}
+    old, new = tmp_path / "old.tar", tmp_path / "new.tar"
+    subprocess.run([tar, "-cf", str(old), "-C", str(stage), "."], check=True, env=env)  # noqa: S603
+    if not _apple_double(old):
+        pytest.skip("this macOS tar does not write AppleDouble entries here: nothing to prove")
+    env["COPYFILE_DISABLE"] = "1"
+    fixed = [tar, "--no-xattrs", "--no-mac-metadata", "-cf", str(new), "-C", str(stage), "."]
+    subprocess.run(fixed, check=True, env=env)  # noqa: S603
+    assert _apple_double(new) == []

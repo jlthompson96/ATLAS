@@ -16,7 +16,7 @@ Records hold IDs, byte counts and SHA-256 hashes only (D7), stored in the clear,
 ## Verify (PT-13)
 
 ```sh
-sudo -u atlas-audit /var/lib/atlas/current/venv/atlas-audit/bin/python -m atlas.audit verify /var/lib/atlas/audit
+sudo -u atlas-audit env PYTHONPATH=/var/lib/atlas/current/backend /var/lib/atlas/current/venv/atlas-audit/bin/python -m atlas.audit verify /var/lib/atlas/audit
 # exit 0: verified. exit 1: tampering or corruption (prints AUDIT_CHAIN_BROKEN and the first problem). exit 2: usage.
 ```
 

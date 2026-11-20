@@ -2,7 +2,8 @@
 # FI-3 load generator (PLAN 8.5): hammer the audit log with batched read events and fsynced write-ahead records while you
 # cut the Pi's power (20 times). Afterwards, on the rebooted Pi, run:
 #
-#   sudo -u atlas-audit /var/lib/atlas/current/venv/atlas-audit/bin/python -m atlas.audit verify /var/lib/atlas/audit
+#   sudo -u atlas-audit env PYTHONPATH=/var/lib/atlas/current/backend \
+#     /var/lib/atlas/current/venv/atlas-audit/bin/python -m atlas.audit verify /var/lib/atlas/audit
 #
 # Expected after every cut: the chain verifies (exit 0, `UNANCHORED:` because no off-box --expect-head is given on the box;
 # at most ~30 s of read-event records lost, nothing corrupt), any torn final line is reported as a warning, and every
