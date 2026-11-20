@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import email.utils
 import json
 import logging
 import mimetypes
@@ -86,6 +87,7 @@ def _response(
     headers["Content-Type"] = content_type
     headers["Content-Length"] = str(len(body))
     headers["Connection"] = "close"
+    headers["Date"] = email.utils.formatdate(usegmt=True)
     headers["Cache-Control"] = "no-store"
     for key, value in SECURITY_HEADERS.items():
         headers[key] = value

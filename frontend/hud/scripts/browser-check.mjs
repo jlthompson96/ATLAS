@@ -8,6 +8,9 @@
 //   (cd ../../backend && .venv/bin/python -m atlas.ui_server.mock --scenario conversation --loop &)
 //   node scripts/browser-check.mjs http://127.0.0.1:4173/ --width 1920 --height 1080 --wait 6000 --axe --shot /tmp/hud
 //
+// Against the real atlas-ui (docs/runbooks/ui-dev.md): pair first, then pass the device cookie and trust the dev CA:
+//   node scripts/browser-check.mjs https://localhost:8443/ --insecure --cookie '__Host-atlas-device=<token>' --axe
+//
 // Uses only the Chrome DevTools Protocol over Node's built-in WebSocket: no extra dependencies.
 // Exits 1 on any CSP violation, off-origin request, console error, uncaught exception or serious/critical axe issue.
 
@@ -29,6 +32,8 @@ const height = Number(opt('height', 900));
 const wait = Number(opt('wait', 4000));
 const shot = opt('shot');
 const doAxe = args.includes('--axe');
+const insecure = args.includes('--insecure'); // dev CA: ignore certificate errors (never for anything real)
+const cookie = opt('cookie');
 const evalExpr = opt('eval');
 const chromeBin = process.env.CHROME_BIN ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
@@ -36,7 +41,7 @@ const profile = mkdtempSync(join(tmpdir(), 'hud-check-'));
 const port = 9222 + Math.floor(Math.random() * 600);
 const chrome = spawn(
   chromeBin,
-  ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', 'about:blank'],
+  ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', ...(insecure ? ['--ignore-certificate-errors'] : []), 'about:blank'],
   { stdio: 'ignore' }
 );
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -87,6 +92,10 @@ try {
 
   for (const d of ['Page', 'Runtime', 'Log', 'Network']) await send(`${d}.enable`);
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  if (cookie) {
+    const i = cookie.indexOf('=');
+    await send('Network.setCookie', { name: cookie.slice(0, i), value: cookie.slice(i + 1), url: origin + '/', secure: true, httpOnly: true, sameSite: 'Strict' });
+  }
   await send('Page.navigate', { url });
   await sleep(wait);
 

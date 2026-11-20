@@ -17,7 +17,9 @@ import argparse
 import asyncio
 import logging
 import os
+import shutil
 import signal
+import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -165,7 +167,9 @@ async def run(args: argparse.Namespace) -> int:
     static_dir = Path(args.static_dir)
     if not (static_dir / "index.html").is_file():
         print(f"The HUD is not built: run `npm ci --ignore-scripts && npm run build` in {static_dir.parent}")
-    sock = directory / "core.sock"
+    # AF_UNIX paths are limited to ~100 bytes and the repo path is usually longer: the socket goes in /tmp.
+    sock_dir = Path(tempfile.mkdtemp(prefix="atlas-dev-", dir="/tmp"))
+    sock = sock_dir / "core.sock"
 
     core = build_core(peers=SameUserPeers(), executor=DevExecutor())
     hub, control = core.hub, core.control
@@ -207,6 +211,7 @@ async def run(args: argparse.Namespace) -> int:
     await stop.wait()
     await server.stop()
     await control.stop()
+    shutil.rmtree(sock_dir, ignore_errors=True)
     return 0
 
 
