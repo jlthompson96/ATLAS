@@ -44,7 +44,8 @@ class KernelPeerCredentials:
                 raw = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
                 _pid, uid, _gid = struct.unpack("3i", raw)
                 return int(uid)
-            if sys.platform == "darwin":
+            # mypy narrows sys.platform per OS: on Linux it sees this branch as dead code, on macOS it doesn't.
+            if sys.platform == "darwin":  # type: ignore[unreachable, unused-ignore]
                 raw = sock.getsockopt(self._SOL_LOCAL, self._LOCAL_PEERCRED, self._XUCRED_SIZE)
                 _version, uid = struct.unpack_from("II", raw)
                 return int(uid)
