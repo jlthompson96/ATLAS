@@ -22,9 +22,10 @@ import os
 import socket
 import stat
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final
 
 from atlas.audit.log import AuditLog, AuditUnavailable, SubmissionRejected, load_body
@@ -42,6 +43,11 @@ MAX_CONNECTIONS_PER_ACTOR: Final = 8  # one service must not use up the global l
 # watch; the free-space floor in AuditLog.append stops it before the card fills.
 APPEND_RATE_PER_S: Final = 5.0
 APPEND_BURST: Final = 50.0
+# atlas-egress writes on behalf of every proxy caller (two records per allowed tunnel, plus denials), so it gets a larger
+# budget (known issue N3). The proxy limits each caller well below it (egress Limits: 2 tunnel opens/s, burst 30, and
+# 1 audited denial/s, burst 10, i.e. at most ~5 records/s per caller sustained), so one caller cannot use up what the
+# others need. Six callers at their sustained maximum together stay within 30/s.
+ACTOR_BUDGETS: Final[Mapping[str, tuple[float, float]]] = MappingProxyType({"atlas-egress": (30.0, 300.0)})
 CLOSE_GRACE_S: Final = 5.0  # bound on waiting for handlers after their connections were closed (TimeoutStopSec is 15)
 
 
@@ -62,12 +68,14 @@ class AuditServer:
         max_connections_per_actor: int = MAX_CONNECTIONS_PER_ACTOR,
         rate_per_s: float = APPEND_RATE_PER_S,
         burst: float = APPEND_BURST,
+        actor_budgets: Mapping[str, tuple[float, float]] = ACTOR_BUDGETS,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.fatal = asyncio.Event()  # set when the service must exit non-zero so systemd restarts it
         self._max_per_actor = max_connections_per_actor
         self._rate = rate_per_s
         self._burst = burst
+        self._actor_budgets = dict(actor_budgets)  # actor -> (rate per s, burst), overriding the default
         self._monotonic = monotonic
         self._actor_connections: dict[str, int] = {}
         self._buckets: dict[str, tuple[float, float]] = {}  # actor -> (tokens, last refill)
@@ -196,9 +204,10 @@ class AuditServer:
 
     def _take_token(self, actor: str) -> bool:
         """Per-actor token bucket over all appends (durable kinds included)."""
+        rate, burst = self._actor_budgets.get(actor, (self._rate, self._burst))
         now = self._monotonic()
-        tokens, last = self._buckets.get(actor, (self._burst, now))
-        tokens = min(self._burst, tokens + (now - last) * self._rate)
+        tokens, last = self._buckets.get(actor, (burst, now))
+        tokens = min(burst, tokens + (now - last) * rate)
         if tokens < 1.0:
             self._buckets[actor] = (tokens, now)
             return False

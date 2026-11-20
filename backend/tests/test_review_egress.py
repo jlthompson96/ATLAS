@@ -84,7 +84,8 @@ def test_f3_proxy_never_forwards_an_ech_hello(tmp_path: Path) -> None:
 
 def test_f5_denial_flood_is_bounded_and_fully_accounted(tmp_path: Path) -> None:
     async def go() -> None:
-        limits = Limits(head_timeout_s=1, hello_timeout_s=1, denial_burst=5, denial_rate_per_s=0.0)
+        # open_burst is raised so that this test exercises the denial limiter, not the tunnel-open limiter (N3)
+        limits = Limits(head_timeout_s=1, hello_timeout_s=1, denial_burst=5, denial_rate_per_s=0.0, open_burst=100)
         async with environment(tmp_path, limits) as env:
             for i in range(60):
                 reader, writer = await connect(env, "atlas-discord", connect_head(f"x{i}.attacker.example"))
