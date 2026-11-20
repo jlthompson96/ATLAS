@@ -314,3 +314,14 @@ def test_d3_dry_run_only_warns_about_the_placeholder_lan_prefix() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "ATLAS_LAN_PREFIX6 is the 2001:db8:: placeholder" in result.stderr
+
+
+# --- D1: WireGuard runs under systemd-networkd, where the key is FirewallMark= ----------------------------------------
+
+
+def test_d1_the_wireguard_mark_is_documented_with_the_networkd_key() -> None:
+    files = [*(DEPLOY / "nftables").iterdir(), *(REPO / "docs" / "runbooks").glob("*.md")]
+    wrong = [f.name for f in files if f.is_file() and "FwMark = 0x5182" in f.read_text()]
+    assert wrong == []  # wg-quick syntax: networkd ignores it, the mark rule never matches, the tunnel is blocked
+    for path in (DEPLOY / "nftables" / "site.nft.example", REPO / "docs" / "runbooks" / "provisioning.md"):
+        assert "FirewallMark=0x5182" in path.read_text(), path.name

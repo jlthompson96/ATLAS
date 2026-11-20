@@ -112,7 +112,7 @@ table inet atlas {
         meta skuid "root" ip daddr $LAN_DNS tcp dport 53 accept
 
         # --- WireGuard to the desktop (kernel-originated UDP, no skuid) ---------------------------------------
-        # Pinned by fwmark: the tunnel's own packets carry FwMark = $WG_FWMARK (set it in the wg0 config, see the runbook),
+        # Pinned by fwmark: the tunnel's own packets carry $WG_FWMARK (FirewallMark= in wg0.netdev, see the runbook),
         # so no user process can send to the desktop's WireGuard port.
         meta mark $WG_FWMARK ip daddr $DESKTOP_LAN_IP udp dport 51820 accept
         # Over the tunnel: atlas-core only, and only LM Studio (1234) and atlas-hostd (8770).
