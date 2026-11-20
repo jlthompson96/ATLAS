@@ -55,7 +55,7 @@ A `write_ahead` with no `write_result` after a crash means the action may or may
 
 ## Retention and deletion (purge)
 
-`AuditLog.purge_segments()` writes a `purge` record (anchor hash of the last purged record) and fsyncs it **before** unlinking the oldest sealed segments, so a crash in between still verifies. **Not implemented in Phase 0:** per-segment data keys (crypto-shredding with `audit-segment-master-key`), zstd compression of sealed segments (not in Python 3.13's standard library), and the scheduled 365-day retention job. The credential is provisioned and loaded but unused.
+`AuditLog.purge_segments()` writes a `purge` record (anchor hash of the last purged record) and fsyncs it, then signs a checkpoint, **before** unlinking the oldest sealed segments, so a crash in between still verifies. A crash part-way through the unlinks leaves a chain that starts inside the purged range; `verify` accepts a start anywhere in a signed purge's `from_seq..to_seq+1` as long as the surviving record at `to_seq` has the anchored hash, and on start the service finishes the purge by unlinking the remaining segments wholly at or below that `to_seq` (known issue N2). Only a purge covered by a verified checkpoint is acted on. **Not implemented in Phase 0:** per-segment data keys (crypto-shredding with `audit-segment-master-key`), zstd compression of sealed segments (not in Python 3.13's standard library), and the scheduled 365-day retention job. The credential is provisioned and loaded but unused.
 
 ## Keys
 

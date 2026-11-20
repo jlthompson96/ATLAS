@@ -71,6 +71,7 @@ class VerifyReport:
     records_after_last_checkpoint: int = 0
     outcome_unknown: list[OutcomeUnknown] = field(default_factory=list)
     genesis_hash: str | None = None  # set when the chain still starts at seq 0
+    purged_through: int = -1  # highest to_seq of a purge covered by a verified checkpoint (-1: none)
     anchored: bool = False  # an off-box expect_head was checked (truncation and rollback are covered)
 
     @property
@@ -245,9 +246,16 @@ def verify_dir(
     covered = [p for p in purges if p["seq"] <= last_signed_to]  # a verified checkpoint commits to these
 
     first = records[0]
+    report.purged_through = max((p["purge"]["to_seq"] for p in covered), default=-1)
     if first["seq"] != 0:
+        # Anchored right after the purged range, or (known issue N2: a crash between the purge's unlinks) anywhere
+        # inside it, as long as the surviving record at to_seq is the one whose hash the signed purge anchors.
         anchored = any(
-            p["purge"]["to_seq"] + 1 == first["seq"] and p["purge"]["anchor_hash"] == first["prev_hash"]
+            (p["purge"]["to_seq"] + 1 == first["seq"] and p["purge"]["anchor_hash"] == first["prev_hash"])
+            or (
+                p["purge"]["from_seq"] <= first["seq"] <= p["purge"]["to_seq"]
+                and hashes.get(p["purge"]["to_seq"]) == p["purge"]["anchor_hash"]
+            )
             for p in covered
         )
         if not anchored:

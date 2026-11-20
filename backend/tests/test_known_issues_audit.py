@@ -370,3 +370,66 @@ def test_n4_after_an_io_failure_the_server_closes_without_waiting_for_idle_clien
             log.close()
 
     run(scenario())
+
+
+# --- N2: a purge interrupted between unlinks ---------------------------------------------------------------------------
+
+
+def interrupted_purge(make_log: MakeLog, clock: Clock, monkeypatch: pytest.MonkeyPatch) -> tuple[AuditLog, list[Path]]:
+    """Four daily segments; a purge of the oldest three crashes after unlinking only the first one."""
+    log = make_log()
+    for day in range(4):
+        log.append("atlas-core", tool_call(day))
+        clock.advance(24 * 3600)
+    log.append("atlas-core", tool_call(9))
+    segments = [p for _, p in list_segments(log.data_dir)]
+    assert len(segments) >= 4
+    real_unlink = Path.unlink
+    unlinked: list[Path] = []
+
+    def unlink_then_crash(self: Path, missing_ok: bool = False) -> None:
+        if self.parent.name == "segments" and unlinked:
+            raise SystemExit("power cut")  # the second unlink never happens
+        unlinked.append(self)
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink_then_crash)
+    with pytest.raises(SystemExit):
+        log.purge_segments([p.stem for p in segments[:3]], "retention")
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    crash(log)
+    return log, segments
+
+
+def test_n2_an_interrupted_purge_still_verifies(
+    make_log: MakeLog, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log, segments = interrupted_purge(make_log, clock, monkeypatch)
+    assert not segments[0].exists() and segments[1].exists()  # the chain now starts inside the purged range
+    report = verify_dir(log.data_dir)
+    assert report.ok, report.errors
+
+
+def test_n2_the_service_starts_and_finishes_an_interrupted_purge(
+    make_log: MakeLog, key: Ed25519PrivateKey, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log, segments = interrupted_purge(make_log, clock, monkeypatch)
+    resumed = restart(log, key, clock)  # the old code: AuditCorrupt, and egress fails closed
+    assert not segments[1].exists() and not segments[2].exists()  # the purge was completed
+    assert segments[3].exists()
+    resumed.append("atlas-core", tool_call())
+    resumed.close()
+    report = verify_dir(log.data_dir)
+    assert report.ok, report.errors
+    assert report.first_seq == json.loads(segments[3].read_text().splitlines()[0])["seq"]
+
+
+def test_n2_a_chain_starting_inside_an_unsigned_purge_range_is_still_rejected(make_log: MakeLog, clock: Clock) -> None:
+    """Deleting old segments without any signed purge stays an error (review F1 is not weakened)."""
+    log = make_log()
+    for day in range(3):
+        log.append("atlas-core", tool_call(day))
+        clock.advance(24 * 3600)
+    log.close()
+    list_segments(log.data_dir)[0][1].unlink()
+    assert not verify_dir(log.data_dir).ok
