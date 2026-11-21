@@ -174,7 +174,10 @@ apply_swap() {
   log "== swap in zram only"
   write_reboot "$ETC/rpi/swap.conf.d/50-atlas.conf" 644 "$(swap_content)"
   if [ -e "$SWAPFILE" ]; then
-    if swapon --show=NAME --noheadings 2>/dev/null | grep -qxF "$SWAPFILE"; then
+    # "In use" also covers rpi-swap's zram+file mode: there the file backs zram through a loop device and never
+    # appears in the swap list (found on the Pi, 2026-11-20).
+    if swapon --show=NAME --noheadings 2>/dev/null | grep -qxF "$SWAPFILE" ||
+      [ -n "$(losetup -nj "$SWAPFILE" 2>/dev/null || true)" ]; then
       log "note    $SWAPFILE is still in use: reboot, then run apply again to remove it"
     else
       log "remove  $SWAPFILE"

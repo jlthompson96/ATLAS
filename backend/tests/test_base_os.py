@@ -47,6 +47,7 @@ class Pi:
     mounts: dict[str, str]
     fstab_mounts: dict[str, str]
     swaps: str = "/dev/zram0\n"
+    loops: str = ""
     sshd_t: str = GOOD_SSHD_T
     sshd_rc: int = 0
     sudo_ts: str = "tty"
@@ -119,6 +120,7 @@ findmnt() {{
     END {{ exit found ? 0 : 1 }}' "$table"
 }}
 swapon() {{ printf '%s' "{pi.swaps}"; }}
+losetup() {{ printf '%s' "{pi.loops}"; }}
 sshd() {{
   echo "sshd $*" >>"{calls}"
   if [ "$1" = -T ]; then cat "{r}/sshd-T"; return 0; fi
@@ -320,6 +322,16 @@ def test_swap_file_in_use_is_left_until_after_the_reboot(tmp_path: Path) -> None
     pi = make_pi(tmp_path)
     (tmp_path / "var-swap").write_text("")
     pi.swaps = f"/dev/zram0\n{tmp_path / 'var-swap'}\n"
+    result = run(pi, "cmd_apply")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "var-swap").exists()
+    assert "still in use" in result.stderr
+
+
+def test_swap_file_backing_zram_through_a_loop_device_is_left_until_after_the_reboot(tmp_path: Path) -> None:
+    pi = make_pi(tmp_path)  # rpi-swap's zram+file mode: the file is a loop device, not in the swap list
+    (tmp_path / "var-swap").write_text("")
+    pi.loops = f"/dev/loop0: []: ({tmp_path / 'var-swap'})\n"
     result = run(pi, "cmd_apply")
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "var-swap").exists()
