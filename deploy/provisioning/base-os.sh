@@ -133,6 +133,15 @@ sudo_content() {
     "Defaults timestamp_type=tty"
 }
 
+# Known issue P1: with the root overlay on, systemd-remount-fs re-applies overlayroot's fstab line for / and the kernel
+# refuses any change to a mounted overlay, so the unit fails at every boot. /media/root-ro (the overlay's lower layer)
+# is a mount point only while the overlay is on, so the unit still runs in a maintenance window.
+REMOUNT_DROPIN=systemd/system/systemd-remount-fs.service.d/50-atlas-overlay.conf
+remount_content() {
+  printf '%s\n' "# ATLAS: skip remounting / while the root overlay is on (known issue P1). Managed by base-os.sh." \
+    "[Unit]" "ConditionPathIsMountPoint=!/media/root-ro"
+}
+
 # --- apply ----------------------------------------------------------------------------------------------------------
 
 # ensure_dir_once PATH MODE OWNER:GROUP: create PATH only if it is missing (no needless card writes).
@@ -306,6 +315,8 @@ cmd_apply() {
   apply_radios
   apply_tmp
   apply_sudo
+  log "== remount-fs: skipped while the overlay is on"
+  write_reboot "$ETC/$REMOUNT_DROPIN" 644 "$(remount_content)"
   apply_sshd "$user"
   if [ "$REBOOT" = "1" ]; then
     log "done. Reboot (sudo reboot), then run: sudo $0 check"
@@ -475,6 +486,21 @@ check_sudo() {
   fi
 }
 
+# The boot-time units behind known issues P1 and P2.
+check_boot() {
+  if same_content "$ETC/$REMOUNT_DROPIN" "$(remount_content)"; then
+    pass "remount-fs: drop-in for the overlay"
+  else
+    fail "remount-fs: $ETC/$REMOUNT_DROPIN missing or changed (run apply with the overlay off)"
+  fi
+  if systemctl is-failed --quiet systemd-remount-fs.service; then
+    fail "remount-fs: systemd-remount-fs.service failed this boot (journalctl -b -u systemd-remount-fs)"
+  else
+    pass "remount-fs: not failed"
+  fi
+  expect "clock synchronized" "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" yes
+}
+
 check_overlay() {
   local cmdline token found=""
   cmdline="$(cat "$BOOT/cmdline.txt" 2>/dev/null || true)"
@@ -506,6 +532,7 @@ cmd_check() {
   check_radios
   check_sshd "$user"
   check_sudo "$user"
+  check_boot
   check_overlay
   if [ "$FAILS" -eq 0 ]; then
     printf 'all checks passed\n'

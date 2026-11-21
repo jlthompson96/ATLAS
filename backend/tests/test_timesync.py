@@ -101,3 +101,24 @@ def test_provision_pi_configures_timesync_from_the_firewall_site_file() -> None:
     assert text.index('install_firewall /etc/atlas "$deploy_dir/nftables"') < text.index("install_timesync")
     assert 'install_timesync "$site_file" /etc/systemd/timesyncd.conf.d/50-atlas.conf' in text
     assert "site_file=/etc/atlas/nftables-site.nft" in text
+
+
+# --- known issue P2: ATLAS starts only once the clock is synced, or after at most 90 s ---------------------------------
+
+
+def test_every_atlas_service_waits_for_time_sync() -> None:
+    units = sorted((DEPLOY / "systemd").glob("atlas-*.service"))
+    assert len(units) == 14
+    for unit in units:
+        lines = unit.read_text().splitlines()
+        section = lines[lines.index("[Unit]") : lines.index("[Service]")]
+        assert "Wants=time-sync.target" in section, unit.name
+        assert "After=time-sync.target" in section, unit.name
+
+
+def test_provision_pi_enables_the_time_wait_with_a_cap() -> None:
+    text = (DEPLOY / "provisioning" / "provision-pi.sh").read_text()
+    assert "/etc/systemd/system/systemd-time-wait-sync.service.d/50-atlas.conf" in text
+    assert '"[Service]" "TimeoutStartSec=90s"' in text  # the stock unit waits forever: no internet, no ATLAS
+    assert "run systemctl enable systemd-time-wait-sync.service" in text
+    assert text.index("systemd-time-wait-sync.service.d") < text.index("run systemctl daemon-reload")

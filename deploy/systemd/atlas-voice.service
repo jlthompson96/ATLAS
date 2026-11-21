@@ -12,6 +12,10 @@
 Description=ATLAS voice: Wake word, VAD, STT, TTS, AEC routing
 Requires=nftables.service
 After=nftables.service
+# Known issue P2: start only once the clock is right (audit timestamps, TLS). provision-pi.sh caps the wait
+# (systemd-time-wait-sync, 90 s), so a Pi without internet still starts.
+Wants=time-sync.target
+After=time-sync.target
 # Audit is mandatory: no audit socket, no service (fail closed).
 Requires=atlas-audit.socket
 After=atlas-audit.socket
