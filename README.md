@@ -27,7 +27,7 @@ plan, with every decision, benchmark and acceptance test, is
 [contracts/](contracts/).
 
 **Status (2026-11-20): the software for a text-only ATLAS runs on the development Mac;
-the hardware is next.**
+Pi bring-up has started.**
 
 - **Built:**
   - The contracts and the HUD.
@@ -41,7 +41,8 @@ the hardware is next.**
 - **Tested so far:**
   - About 1,380 backend tests, on the Mac and again on Python 3.13 in an ARM64 Debian VM (a few run on only one of the two).
   - The VM also gets the same provisioning and deploy as the Pi. Egress test PT-1 passes there, the audit log survives hard power cuts, and a release that crash-loops is rolled back automatically.
-- **Not yet run on real hardware:** `atlas-hostd` (only tested against a simulated Windows layer), WireGuard, and everything that needs the Pi (Phase 0).
+- **On the Pi so far:** Pi OS installed and updated, with the final card layout (16 GiB root, 103 GiB data partition). The base setup and provisioning are next.
+- **Not yet run on real hardware:** `atlas-hostd` (only tested against a simulated Windows layer), WireGuard, and ATLAS itself on the Pi (Phase 0).
 - **No voice yet**, which comes in Phase 3.
 
 Open problems are tracked in [docs/known-issues.md](docs/known-issues.md).
@@ -235,7 +236,7 @@ that expire within 7 days, and a rehearsed theft runbook.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="docs/assets/phases-light.svg">
-    <img src="docs/assets/phases.svg" alt="Build status: Step C0, atlas-hostd, the HUD and the Pi foundations merged; Phase 0 next (hardware); Phase 1 and Phase 2 software built; Phases 3 to 6 planned" width="100%">
+    <img src="docs/assets/phases.svg" alt="Build status: Step C0, atlas-hostd, the HUD and the Pi foundations merged; Phase 0 in progress (Pi bring-up); Phase 1 and Phase 2 software built; Phases 3 to 6 planned" width="100%">
   </picture>
 </p>
 
@@ -254,7 +255,7 @@ works as one coherent design.
 | Phase 1 software | LM Studio backend, `atlas-hostd` client, Wake-on-LAN and the wake flow, local grammar for time/date/wake/sleep | **Merged**; not yet run against the real desktop |
 | Phase 2 server | `atlas-ui`: HTTPS, device pairing, step-up PIN, privacy mode, the core control socket | **Merged**; the kiosk on the Pi is still to do |
 | ARM64 VM | Debian 13 VM on the Mac standing in for the Pi: Python 3.13, provisioning, deploy, PT-1, power cuts | **Running**; results in [pi-verification.md](docs/runbooks/pi-verification.md) |
-| Pi bring-up | From a blank card to provisioning: card layout, then `base-os.sh` for fewer card writes, key-only SSH, a pass/fail check and the hardware inventory | **Ready**, waiting for the microSD cards; [pi-bringup.md](docs/runbooks/pi-bringup.md) |
+| Pi bring-up | From a blank card to provisioning: card layout, then `base-os.sh` for fewer card writes, key-only SSH, a pass/fail check and the hardware inventory | **In progress**: steps 1–7 done on the Pi (card layout, updates, inventory); step 8 next. [pi-bringup.md](docs/runbooks/pi-bringup.md) |
 
 Every phase ends with an ADR and recorded benchmarks.
 
