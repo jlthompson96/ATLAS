@@ -594,11 +594,12 @@ def test_socket_group_table_and_reserved_names_were_parsed() -> None:
     for path, group in groups.items():
         stem = "atlas-" + Path(path).stem
         assert Unit(SYSTEMD / f"{stem}.socket").one("SocketGroup", "Socket") == group
-    assert md_reserved_names() == {"releases", "current", "previous", "incoming", "credentials"}
+    assert md_reserved_names() == {"releases", "current", "previous", "incoming", "credentials", "logs"}
     assert not md_reserved_names() & {n.removeprefix("atlas-") for n in PI_SERVICES}
     release = (DEPLOY / "provisioning" / "atlas-release.sh").read_text()
+    users = release + "".join((DEPLOY / "provisioning" / f).read_text() for f in ("provision-pi.sh", "base-os.sh"))
     for name in md_reserved_names():
-        assert name in release or name in (DEPLOY / "provisioning" / "provision-pi.sh").read_text()
+        assert f"/{name}" in users or f"{name}/" in users
 
 
 def test_services_md_family_table_was_parsed() -> None:

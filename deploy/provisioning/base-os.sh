@@ -18,6 +18,8 @@ ETC=/etc
 BOOT=/boot/firmware
 DATA=/var/lib/atlas
 SWAPFILE=/var/swap
+JOURNAL=/var/log/journal
+FSROOT=""   # prefix for directories apply creates; the tests point it at a throwaway tree
 PROC=/proc
 SYS=/sys
 
@@ -88,9 +90,26 @@ config_txt_has() {
   ' "$1"
 }
 
+# Persistent but bounded (PLAN 2.7): 256 MB and 30 days on the data partition. Entries below CRIT reach the card at
+# most every 5 minutes. Pi OS's /usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf is read first.
 journal_content() {
-  printf '%s\n' "# ATLAS: journal in RAM only (PLAN 2.7). Managed by deploy/provisioning/base-os.sh." \
-    "[Journal]" "Storage=volatile" "RuntimeMaxUse=64M"
+  printf '%s\n' "# ATLAS: journal on the data partition, capped (PLAN 2.7). Managed by deploy/provisioning/base-os.sh." \
+    "[Journal]" "Storage=persistent" "SystemMaxUse=256M" "MaxRetentionSec=30day" "SyncIntervalSec=5m" \
+    "RuntimeMaxUse=64M"
+}
+
+# The journal lives in $DATA/logs/journal and is bind-mounted at /var/log/journal, so journald and journalctl need no
+# changes and the read-only root is not written. nofail: if the data partition is missing, boot goes on with the
+# journal in RAM (the overlay) instead of stopping.
+journal_fstab_line() {
+  printf '%s\n' "$DATA/logs/journal  $JOURNAL  none  bind,nofail,x-systemd.requires-mounts-for=$DATA  0  0"
+}
+
+# journald_value KEY: the effective journald setting (the last value read wins).
+journald_value() {
+  systemd-analyze cat-config systemd/journald.conf 2>/dev/null |
+    awk -F= -v k="$1" '$0 ~ "^[[:space:]]*" k "[[:space:]]*=" { v = $2; gsub(/[[:space:]]/, "", v) } END { print v }' ||
+    true
 }
 
 # rpi-swap's default mechanism ("auto", currently zram+file) writes idle pages to /var/swap on the card.
@@ -116,9 +135,39 @@ sudo_content() {
 
 # --- apply ----------------------------------------------------------------------------------------------------------
 
+# ensure_dir_once PATH MODE OWNER:GROUP: create PATH only if it is missing (no needless card writes).
+ensure_dir_once() {
+  if [ -d "$FSROOT$1" ]; then
+    log "ok      $1"
+  else
+    ensure_dir "$FSROOT$1" "$2" "$3"
+  fi
+}
+
 apply_journal() {
-  log "== journal in RAM"
-  write_reboot "$ETC/systemd/journald.conf.d/50-atlas-volatile.conf" 644 "$(journal_content)"
+  log "== journal on the data partition: $DATA/logs/journal, at most 256 MB and 30 days"
+  if ! findmnt -n "$DATA" >/dev/null 2>&1; then
+    if [ "$DRY_RUN" = "1" ]; then
+      log "WARNING: $DATA is not mounted; a real run refuses (the journal would land on the root filesystem)"
+    else
+      die "$DATA is not mounted: set up the data partition first (runbook step 6)"
+    fi
+  fi
+  ensure_dir_once "$DATA/logs" 755 root:root
+  ensure_dir_once "$DATA/logs/journal" 2755 root:systemd-journal
+  ensure_dir_once "$JOURNAL" 2755 root:systemd-journal
+  write_reboot "$ETC/systemd/journald.conf.d/50-atlas-journal.conf" 644 "$(journal_content)"
+  if awk -v t="$JOURNAL" '!/^[[:space:]]*#/ && $2 == t { found = 1 } END { exit found ? 0 : 1 }' "$ETC/fstab"; then
+    if awk -v want="$(journal_fstab_line)" '{ line = $0; gsub(/[[:space:]]+/, " ", line); gsub(/[[:space:]]+/, " ", want) }
+        line == want { found = 1 } END { exit found ? 0 : 1 }' "$ETC/fstab"; then
+      log "ok      $ETC/fstab has the $JOURNAL bind mount"
+    else
+      die "$ETC/fstab already has a different $JOURNAL entry; fix it by hand (want: $(journal_fstab_line))"
+    fi
+  else
+    append_text "$ETC/fstab" "$(journal_fstab_line)"
+    REBOOT=1
+  fi
 }
 
 apply_swap() {
@@ -343,7 +392,7 @@ check_data() {
 }
 
 check_writes() {
-  local swaps other storage
+  local swaps other data_source
   swaps="$(swapon --show=NAME --noheadings 2>/dev/null || true)"
   other="$(printf '%s\n' "$swaps" | grep -v '^/dev/zram' | grep -v '^$' || true)"
   if [ -n "$swaps" ] && [ -z "$other" ]; then
@@ -356,9 +405,12 @@ check_writes() {
   else
     pass "swap: no $SWAPFILE"
   fi
-  storage="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null |
-    awk -F= '/^[[:space:]]*Storage[[:space:]]*=/ { v = $2; gsub(/[[:space:]]/, "", v) } END { print v }' || true)"
-  expect "journal Storage" "$storage" volatile
+  expect "journal Storage" "$(journald_value Storage)" persistent
+  expect "journal SystemMaxUse" "$(journald_value SystemMaxUse)" 256M
+  expect "journal MaxRetentionSec" "$(journald_value MaxRetentionSec)" 30day
+  expect "journal in fstab" "$(findmnt --fstab -no SOURCE "$JOURNAL" 2>/dev/null || true)" "$DATA/logs/journal"
+  data_source="$(findmnt -no SOURCE "$DATA" 2>/dev/null || true)"
+  expect "journal mount" "$(findmnt -no SOURCE "$JOURNAL" 2>/dev/null || true)" "${data_source:-?}[/logs/journal]"
   expect "/tmp" "$(findmnt -no FSTYPE /tmp 2>/dev/null || true)" tmpfs
 }
 

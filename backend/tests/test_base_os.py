@@ -98,6 +98,7 @@ def run(pi: Pi, snippet: str) -> subprocess.CompletedProcess[str]:
 source "{BASE_OS}"
 ATLAS_ADMIN_USER=admin; unset SUDO_USER
 ETC="{pi.etc}"; BOOT="{pi.boot}"; DATA=/var/lib/atlas; SWAPFILE="{r}/var-swap"; PROC="{r}/proc"; SYS="{r}/sys"
+FSROOT="{r}"
 id() {{ if [ "$1" = -u ]; then echo 0; else command id "$@"; fi; }}
 getent() {{ [ "$1" = passwd ] && [ "$2" = admin ] && echo "admin:x:1000:1000::{r}/home/admin:/bin/bash"; }}
 install() {{
@@ -151,10 +152,16 @@ def tree(pi: Pi) -> dict[str, str]:
     }
 
 
+JOURNAL_FSTAB = "/var/lib/atlas/logs/journal  /var/log/journal  none  bind,nofail,x-systemd.requires-mounts-for=/var/lib/atlas  0  0"
+
+
 def applied(tmp_path: Path) -> Pi:
+    """A Pi after apply and the reboot: the new fstab lines are mounted."""
     pi = make_pi(tmp_path)
     result = run(pi, "cmd_apply")
     assert result.returncode == 0, result.stderr
+    pi.fstab_mounts["/var/log/journal"] = "/var/lib/atlas/logs/journal"
+    pi.mounts["/var/log/journal"] = "ext4 /dev/mmcblk0p3[/logs/journal] rw,noatime,errors=remount-ro,commit=60"
     return pi
 
 
@@ -168,8 +175,12 @@ def test_apply_writes_steps_8_and_9(tmp_path: Path) -> None:
     result = run(pi, "cmd_apply")
     assert result.returncode == 0, result.stderr
 
-    journal = (pi.etc / "systemd/journald.conf.d/50-atlas-volatile.conf").read_text()
-    assert "Storage=volatile" in journal and "RuntimeMaxUse=64M" in journal
+    journal = (pi.etc / "systemd/journald.conf.d/50-atlas-journal.conf").read_text().splitlines()
+    for line in ("Storage=persistent", "SystemMaxUse=256M", "MaxRetentionSec=30day", "SyncIntervalSec=5m"):
+        assert line in journal
+    assert JOURNAL_FSTAB in (pi.etc / "fstab").read_text().splitlines()
+    for d in ("var/lib/atlas/logs/journal", "var/log/journal"):
+        assert (tmp_path / d).is_dir()
     swap = (pi.etc / "rpi/swap.conf.d/50-atlas.conf").read_text()
     assert "Mechanism=zram" in swap and "FixedSizeMiB=2048" in swap
     sshd = (pi.etc / "ssh/sshd_config.d/10-atlas.conf").read_text().splitlines()
@@ -272,6 +283,29 @@ def test_rejected_new_sshd_config_is_removed(tmp_path: Path) -> None:
     assert not (pi.etc / "ssh/sshd_config.d/10-atlas.conf").exists()
 
 
+def test_apply_refuses_without_the_data_partition(tmp_path: Path) -> None:
+    pi = make_pi(tmp_path)
+    pi.mounts.pop("/var/lib/atlas")
+    result = run(pi, "cmd_apply")
+    assert result.returncode != 0
+    assert "not mounted" in result.stderr
+    assert not (tmp_path / "var/lib/atlas").exists()  # no journal directory on the root filesystem
+    assert not (pi.etc / "systemd/journald.conf.d/50-atlas-journal.conf").exists()
+    dry = run(pi, "DRY_RUN=1; cmd_apply")
+    assert dry.returncode == 0, dry.stderr
+    assert "a real run refuses" in dry.stderr
+
+
+def test_apply_leaves_a_different_journal_fstab_entry_alone(tmp_path: Path) -> None:
+    pi = make_pi(tmp_path)
+    other = "tmpfs  /var/log/journal  tmpfs  defaults  0  0"
+    (pi.etc / "fstab").write_text(f"proc /proc proc defaults 0 0\n{other}\n")
+    result = run(pi, "cmd_apply")
+    assert result.returncode != 0
+    assert "different /var/log/journal entry" in result.stderr
+    assert (pi.etc / "fstab").read_text() == f"proc /proc proc defaults 0 0\n{other}\n"
+
+
 def test_sudoers_drop_in_that_visudo_rejects_is_not_installed(tmp_path: Path) -> None:
     pi = make_pi(tmp_path)
     pi.visudo_rc = 1
@@ -360,8 +394,13 @@ def test_check_passes_on_a_set_up_pi(tmp_path: Path) -> None:
         (lambda pi: (pi.root / "sys/class/net/wlan0").mkdir(), "wlan0"),
         (lambda pi: (pi.root / "sys/class/bluetooth/hci0").mkdir(parents=True), "bluetooth"),
         (lambda pi: (pi.boot / "config.txt").write_text(STOCK_CONFIG + "dtoverlay=disable-wifi\n"), "disable-wifi"),
-        (lambda pi: (pi.etc / "systemd/journald.conf.d/50-atlas-volatile.conf").unlink(), "journal"),
-        (lambda pi: (pi.etc / "systemd/journald.conf.d/60-later.conf").write_text("[Journal]\nStorage = persistent\n"), "persistent"),
+        (lambda pi: (pi.etc / "systemd/journald.conf.d/50-atlas-journal.conf").unlink(), "journal Storage"),
+        (lambda pi: (pi.etc / "systemd/journald.conf.d/60-later.conf").write_text("[Journal]\nStorage = volatile\n"), "volatile"),
+        (lambda pi: (pi.etc / "systemd/journald.conf.d/60-later.conf").write_text("[Journal]\nSystemMaxUse=4G\n"), "SystemMaxUse"),
+        (lambda pi: (pi.etc / "systemd/journald.conf.d/60-later.conf").write_text("[Journal]\nMaxRetentionSec=0\n"), "MaxRetentionSec"),
+        (lambda pi: pi.fstab_mounts.pop("/var/log/journal"), "journal in fstab"),
+        (lambda pi: pi.mounts.pop("/var/log/journal"), "journal mount"),
+        (lambda pi: pi.mounts.update({"/var/log/journal": "ext4 /dev/mmcblk0p2[/var/log/journal] rw"}), "journal mount"),
         (lambda pi: (pi.boot / "cmdline.txt").write_text("overlayroot=tmpfs " + CMDLINE), "overlayroot=tmpfs'"),
         (lambda pi: (pi.etc / "os-release").write_text("VERSION_CODENAME=bookworm\n"), "trixie"),
     ],

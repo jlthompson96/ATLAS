@@ -32,7 +32,7 @@ On the Pi directly: `sudo atlas-release rollback`.
 ## When something goes wrong
 
 - *"python3 is not 3.13"*: the locks are CPython 3.13 only; install it or re-lock (`backend/scripts/relock-pi.sh`).
-- *Health check failed, rolled back*: `journalctl -u atlas-audit -u atlas-egress -n 50` (journald is volatile; errors are also forwarded to audit).
+- *Health check failed, rolled back*: `journalctl -u atlas-audit -u atlas-egress -n 50` (the journal keeps 30 days on the data partition; add `-b -1` for the previous boot; errors are also forwarded to audit).
 - *wheel hash mismatch while building*: the lock and PyPI disagree; do not bypass, investigate (supply chain, PLAN T6).
 - *A deploy changes a lock*: dependency changes are their own reviewed change (CLAUDE.md); regenerate with `backend/scripts/relock.sh` and `backend/scripts/relock-pi.sh audit <pins>`, and compare the hashes inside the ARM64 VM.
 

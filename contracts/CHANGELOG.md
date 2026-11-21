@@ -7,3 +7,4 @@
 | 2026-11-16 | events.v1 | 1.1.0 | Proposal 2026-11-16-hud-activity-heartbeat, approved by the owner: client message `activity.ping` (empty payload, no reply, at most once every 30 s on real input); inactivity rule stated in `PrivacyMode` and README. |
 | 2026-11-16 | services.md | 1.1.0 | Proposal 2026-11-16-socket-groups-and-reserved-names, approved by the owner: socket group table (`atlas-core-clients`, `atlas-audit-clients`), reserved names `previous`, `incoming`, `credentials`, address-family relaxations table, capability list. |
 | 2026-11-16 | audit-record.v1 | 1.1.0 | Same proposal, section 4: `egress.block_reason` gains `malformed_request` and `limit`. |
+| 2026-11-20 | services.md | 1.2.0 | Proposal 2026-11-20-logs-reserved-name, approved by the owner: reserved name `logs` under `/var/lib/atlas` (persistent journal, bind-mounted at `/var/log/journal`, 256 MB / 30 days, root-only). |

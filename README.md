@@ -417,7 +417,7 @@ proposal in [contracts/proposals/](contracts/proposals/) with a revision bump, r
 | [`events.v1.schema.json`](contracts/events.v1.schema.json) | Every event between the backend and the HUD | 1.1.0 |
 | [`hostd.v1.yaml`](contracts/hostd.v1.yaml) | The Pi ↔ `atlas-hostd` API (OpenAPI) | 1.1.0 |
 | [`audit-record.v1.schema.json`](contracts/audit-record.v1.schema.json) | The audit record format | 1.1.0 |
-| [`services.md`](contracts/services.md) | Service names, users, sockets, ports, secrets and egress allowlists | 1.1.0 |
+| [`services.md`](contracts/services.md) | Service names, users, sockets, ports, secrets and egress allowlists | 1.2.0 |
 | [`llm/interface.py`](backend/atlas/llm/interface.py), [`power/interface.py`](backend/atlas/power/interface.py) | `LLMBackend` and `PowerController` | 1.0.0 |
 
 ## Layout
