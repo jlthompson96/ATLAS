@@ -31,6 +31,12 @@ GOOD_SSHD_T = (
     "port 22\npasswordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin no\n"
     "authenticationmethods publickey\nallowusers admin\n"
 )
+# `sudo -l -U admin` after provision-pi.sh, which adds the one password-free rule.
+GOOD_SUDO_L = (
+    "Matching Defaults entries for admin on atlas-pi:\n    env_reset, mail_badpass, use_pty, timestamp_type=tty\n\n"
+    "User admin may run the following commands on atlas-pi:\n    (ALL : ALL) ALL\n"
+    "    (root) NOPASSWD: /usr/local/sbin/atlas-release\n"
+)
 
 
 @dataclass
@@ -43,6 +49,9 @@ class Pi:
     swaps: str = "/dev/zram0\n"
     sshd_t: str = GOOD_SSHD_T
     sshd_rc: int = 0
+    sudo_ts: str = "tty"
+    sudo_l: str = GOOD_SUDO_L
+    visudo_rc: int = 0
     throttled: str = "throttled=0x0"
     mem_kb: int = 8_245_000
 
@@ -61,7 +70,7 @@ class Pi:
 
 
 def make_pi(tmp_path: Path) -> Pi:
-    """A Pi as it is after runbook step 7: stock files, the data partition mounted, nothing from step 8 or 9 yet."""
+    """A Pi as it is after runbook steps 6 and 7: stock files, the data partition mounted, nothing from step 8 or 9 yet."""
     pi = Pi(tmp_path, dict(GOOD_MOUNTS), {"/var/lib/atlas": "UUID=00000000-0000-4000-8000-000000000000"})
     for d in ("etc/ssh/sshd_config.d", "boot", "home/admin/.ssh", "proc/device-tree", "sys/class/net/eth0", "data"):
         (tmp_path / d).mkdir(parents=True)
@@ -82,6 +91,7 @@ def run(pi: Pi, snippet: str) -> subprocess.CompletedProcess[str]:
     (pi.root / "mounts").write_text(mounts + "\n")
     (pi.root / "fstab-mounts").write_text(fstab + "\n")
     (pi.root / "sshd-T").write_text(pi.sshd_t)
+    (pi.root / "sudo-l").write_text(pi.sudo_l)
     calls = pi.root / "calls"
     r = pi.root
     script = f"""
@@ -114,6 +124,13 @@ sshd() {{
   return {pi.sshd_rc}
 }}
 systemctl() {{ echo "systemctl $*" >>"{calls}"; return 0; }}
+visudo() {{ echo "visudo $1" >>"{calls}"; return {pi.visudo_rc}; }}
+sudo() {{
+  case "$1" in
+    -V) echo "Authentication timestamp timeout: 15.0 minutes"; echo "Type of authentication timestamp record: {pi.sudo_ts}" ;;
+    -l) cat "{r}/sudo-l" ;;
+  esac
+}}
 vcgencmd() {{
   case "$1" in get_throttled) echo "{pi.throttled}" ;; measure_temp) echo "temp=45.1'C" ;; *) echo "2026/09/01 12:00:00" ;; esac
 }}
@@ -130,7 +147,7 @@ def tree(pi: Pi) -> dict[str, str]:
     return {
         str(p.relative_to(pi.root)): p.read_text()
         for p in sorted(pi.root.rglob("*"))
-        if p.is_file() and p.name not in {"calls", "mounts", "fstab-mounts", "sshd-T"}
+        if p.is_file() and p.name not in {"calls", "mounts", "fstab-mounts", "sshd-T", "sudo-l"}
     }
 
 
@@ -160,6 +177,9 @@ def test_apply_writes_steps_8_and_9(tmp_path: Path) -> None:
                  "AuthenticationMethods publickey", "AllowUsers admin"):  # fmt: skip
         assert line in sshd
     assert "tmpfs  /tmp  tmpfs  defaults,noatime,mode=1777  0  0" in (pi.etc / "fstab").read_text()
+    sudoers = pi.etc / "sudoers.d/020_atlas-tty"  # read after Pi OS's 010_global-tty, so it wins
+    assert "Defaults timestamp_type=tty" in sudoers.read_text().splitlines()
+    assert sudoers.stat().st_mode & 0o777 == 0o440
     assert not (tmp_path / "var-swap").exists()
 
     config = (pi.boot / "config.txt").read_text()
@@ -168,7 +188,12 @@ def test_apply_writes_steps_8_and_9(tmp_path: Path) -> None:
     assert tail.index("[all]") < tail.index("dtoverlay=disable-wifi")  # not under the stock file's last [cm5]
     assert "dtoverlay=disable-bt" in tail
 
-    assert pi.calls == ["sshd -t", "systemctl is-active --quiet ssh.service", "systemctl reload ssh.service"]
+    assert pi.calls == [
+        "visudo -cf",
+        "sshd -t",
+        "systemctl is-active --quiet ssh.service",
+        "systemctl reload ssh.service",
+    ]
     assert "Reboot" in result.stderr and "second terminal" in result.stderr
 
 
@@ -247,6 +272,16 @@ def test_rejected_new_sshd_config_is_removed(tmp_path: Path) -> None:
     assert not (pi.etc / "ssh/sshd_config.d/10-atlas.conf").exists()
 
 
+def test_sudoers_drop_in_that_visudo_rejects_is_not_installed(tmp_path: Path) -> None:
+    pi = make_pi(tmp_path)
+    pi.visudo_rc = 1
+    result = run(pi, "cmd_apply")
+    assert result.returncode != 0
+    assert "visudo rejected" in result.stderr
+    assert not (pi.etc / "sudoers.d/020_atlas-tty").exists()
+    assert "sshd -t" not in pi.calls  # stopped before SSH was touched
+
+
 def test_swap_file_in_use_is_left_until_after_the_reboot(tmp_path: Path) -> None:
     pi = make_pi(tmp_path)
     (tmp_path / "var-swap").write_text("")
@@ -316,6 +351,11 @@ def test_check_passes_on_a_set_up_pi(tmp_path: Path) -> None:
         (lambda pi: setattr(pi, "sshd_t", GOOD_SSHD_T.replace("allowusers admin", "allowusers admin other")), "allowusers"),
         (lambda pi: setattr(pi, "sshd_t", GOOD_SSHD_T.replace("passwordauthentication no", "passwordauthentication yes")), "passwordauthentication"),
         (lambda pi: setattr(pi, "sshd_t", ""), "sshd -T"),
+        (lambda pi: setattr(pi, "sudo_ts", "global"), "timestamp_type"),
+        (lambda pi: setattr(pi, "sudo_l", GOOD_SUDO_L + "    (ALL) NOPASSWD: ALL\n"), "without a password"),
+        (lambda pi: setattr(pi, "sudo_l", GOOD_SUDO_L.replace("/usr/local/sbin/atlas-release", "/usr/bin/apt")), "/usr/bin/apt"),
+        (lambda pi: setattr(pi, "sudo_l", GOOD_SUDO_L.replace("use_pty,", "use_pty, !authenticate,")), "!authenticate"),
+        (lambda pi: setattr(pi, "sudo_l", ""), "sudo -l"),
         (lambda pi: pi.mounts.update({TMP: "ext4 /dev/mmcblk0p2 rw"}), f"{TMP}:"),
         (lambda pi: (pi.root / "sys/class/net/wlan0").mkdir(), "wlan0"),
         (lambda pi: (pi.root / "sys/class/bluetooth/hci0").mkdir(parents=True), "bluetooth"),

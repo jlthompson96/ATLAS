@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Base OS setup for the ATLAS Pi: docs/runbooks/pi-bringup.md step 6 (inventory), 8 (apply) and 9 (check).
+# Base OS setup for the ATLAS Pi: docs/runbooks/pi-bringup.md step 7 (inventory), 8 (apply) and 9 (check).
 #
 #   sudo ./base-os.sh apply [--dry-run]   # fewer card writes, wired only, key-only SSH for the admin. Idempotent.
 #   sudo ./base-os.sh check               # PASS/FAIL per expectation; exit 1 if anything fails
 #   sudo ./base-os.sh inventory           # Markdown for docs/inventory/pi-<date>.md (no MAC, serial or IP)
 #
 # The admin user is ATLAS_ADMIN_USER, or the user who ran sudo. Run apply before provisioning, with the root overlay
-# off. The card layout (runbook step 7) stays manual: re-partitioning a live card is not something to automate.
+# off. The card layout (runbook step 6) stays manual: re-partitioning a live card is not something to automate.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -106,6 +106,14 @@ sshd_content() {
     "AuthenticationMethods publickey" "AllowUsers $1"
 }
 
+# Pi OS ships /etc/sudoers.d/010_global-tty (timestamp_type=global): once the admin types the sudo password, every
+# other session of that user, an SSH login with a stolen key included, gets root without it for 15 minutes. tty is
+# sudo's own default. Named 020_* so it is read after 010_*: the last Defaults value wins.
+sudo_content() {
+  printf '%s\n' "# ATLAS: a cached sudo password counts only in the terminal it was typed in. Managed by base-os.sh." \
+    "Defaults timestamp_type=tty"
+}
+
 # --- apply ----------------------------------------------------------------------------------------------------------
 
 apply_journal() {
@@ -163,6 +171,27 @@ apply_tmp() {
   fi
 }
 
+# A sudoers file that does not parse breaks sudo for everyone, so it is checked with visudo before it is installed.
+apply_sudo() {
+  local dst="$ETC/sudoers.d/020_atlas-tty" content tmp
+  log "== sudo: password cache per terminal"
+  content="$(sudo_content)"
+  if same_content "$dst" "$content"; then
+    log "ok      $dst"
+    return 0
+  fi
+  if [ "$DRY_RUN" != "1" ]; then
+    tmp="$(mktemp)"
+    printf '%s\n' "$content" >"$tmp"
+    if ! visudo -cf "$tmp" >/dev/null; then
+      rm -f "$tmp"
+      die "visudo rejected the sudoers drop-in; $dst was not installed"
+    fi
+    rm -f "$tmp"
+  fi
+  write_file "$dst" 440 "$content"
+}
+
 apply_sshd() {
   local user="$1" dst="$ETC/ssh/sshd_config.d/10-atlas.conf" content backup=""
   log "== SSH: key only, $user only"
@@ -218,12 +247,13 @@ cmd_apply() {
     fi
   fi
   if ! findmnt -n "$DATA" >/dev/null 2>&1; then
-    log "WARNING: $DATA is not a mount point: the data partition (runbook step 7) is not set up yet"
+    log "WARNING: $DATA is not a mount point: the data partition (runbook step 6) is not set up yet"
   fi
   apply_journal
   apply_swap
   apply_radios
   apply_tmp
+  apply_sudo
   apply_sshd "$user"
   if [ "$REBOOT" = "1" ]; then
     log "done. Reboot (sudo reboot), then run: sudo $0 check"
@@ -287,7 +317,7 @@ check_data() {
   local fstype source options fstab_source opt
   fstype="$(findmnt -no FSTYPE "$DATA" 2>/dev/null || true)"
   if [ -z "$fstype" ]; then
-    fail "data: $DATA is not a mount point (runbook step 7)"
+    fail "data: $DATA is not a mount point (runbook step 6)"
     return 0
   fi
   source="$(findmnt -no SOURCE "$DATA" 2>/dev/null || true)"
@@ -370,6 +400,26 @@ check_sshd() {
   done
 }
 
+# sudo's parsed settings, not the files: a rule can come from any file in sudoers.d (cloud-init writes
+# 90-cloud-init-users when user-data asks for NOPASSWD). The one password-free rule allowed is provision-pi.sh's.
+check_sudo() {
+  local user="$1" ts rules bad
+  ts="$(LC_ALL=C sudo -V 2>/dev/null | awk -F': ' '$1 == "Type of authentication timestamp record" { print $2 }' || true)"
+  expect "sudo timestamp_type" "$ts" tty
+  rules="$(LC_ALL=C sudo -l -U "$user" 2>/dev/null || true)"
+  if [ -z "$rules" ]; then
+    fail "sudo: 'sudo -l -U $user' printed nothing (run check as root)"
+    return 0
+  fi
+  bad="$(printf '%s\n' "$rules" | grep -E 'NOPASSWD|!authenticate' |
+    grep -vxE '[[:space:]]*\(root\) NOPASSWD: /usr/local/sbin/atlas-release' || true)"
+  if [ -z "$bad" ]; then
+    pass "sudo: $user needs the password (atlas-release excepted)"
+  else
+    fail "sudo: $user has root without a password: $(printf '%s' "$bad" | tr -s ' \n' ' ')"
+  fi
+}
+
 check_overlay() {
   local cmdline token found=""
   cmdline="$(cat "$BOOT/cmdline.txt" 2>/dev/null || true)"
@@ -400,6 +450,7 @@ cmd_check() {
   check_writes
   check_radios
   check_sshd "$user"
+  check_sudo "$user"
   check_overlay
   if [ "$FAILS" -eq 0 ]; then
     printf 'all checks passed\n'

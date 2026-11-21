@@ -12,8 +12,8 @@ Facts marked *(source-checked)* were read from the Raspberry Pi OS Trixie packag
 
 | Item | Status | Notes |
 |---|---|---|
-| Raspberry Pi 5, 8 GB, with the Active Cooler fitted | Have | A9 assumes 8 GB; step 6 confirms it. |
-| Official 27 W USB-C power supply | Have | R-HW2. A weaker supply causes undervoltage, which step 6 checks for. |
+| Raspberry Pi 5, 8 GB, with the Active Cooler fitted | Have | A9 assumes 8 GB; step 7 confirms it. |
+| Official 27 W USB-C power supply | Have | R-HW2. A weaker supply causes undervoltage, which step 7 checks for. |
 | **2 × high-endurance microSD, 64 GB or larger** | **To buy** | One for the Pi, one spare kept as a golden image (R-STO). Compare the vendors' endurance (TBW) ratings when you buy. |
 | Ethernet cable to the same router or switch as the Windows desktop | ? | A5: Wake-on-LAN needs both on one LAN segment. No Wi-Fi: step 8 turns it off. |
 | An SD card reader on the Mac | ? | |
@@ -85,38 +85,11 @@ Side effect: the same flag also gives the card a new random disk ID on first boo
 
    Expect `mmcblk0p1` (boot, about 0.5 GiB) and `mmcblk0p2` (root, a few GiB), with most of the card as **free space** after them. If `p2` fills the card, step 4 didn't take: flash again.
 
-## 6. Update, install, inventory
+## 6. Card layout: grow root, add the data partition
 
-Update while the Pi still has normal internet access. After provisioning, root can't reach the internet (PLAN §5.2).
+Target layout (R-STO): boot as it is, **root grown to 16 GiB**, and **data on the rest** (about 40 GiB on a 64 GB card, 103 GiB on a 128 GB one).
 
-```sh
-sudo apt update && sudo apt full-upgrade -y
-sudo apt install -y nftables python3-venv openssl sudo curl overlayroot ethtool
-sudo reboot
-```
-
-`overlayroot` isn't used until step 11, but it has to be installed now, while apt can still download.
-
-Copy the repository's `deploy/` directory to the Pi (it holds no secrets), then record the inventory (verifies A9 and §0.4):
-
-```sh
-# on the Mac, from the repository
-scp -rq deploy atlas-pi:atlas-deploy
-
-# on the Pi
-sudo ~/atlas-deploy/provisioning/base-os.sh inventory | tee ~/inventory.md
-
-# on the Mac
-scp atlas-pi:inventory.md "docs/inventory/pi-$(date +%F).md"
-```
-
-**The repository is public.** The inventory leaves out MAC addresses, serial numbers, IP addresses and UUIDs, and a test checks that it reads none of them. Don't add them by hand.
-
-**Expect:** `Raspberry Pi 5 Model B`, about 8 GB of RAM (7.9 GiB shown), Debian 13 (trixie), `arm64`, Python 3.13, and `throttled=0x0` (no undervoltage or throttling so far). If any of these differ, stop: the dependency locks are built for exactly this (CLAUDE.md).
-
-## 7. Card layout: grow root, add the data partition
-
-Target layout (R-STO): boot as it is, **root grown to 16 GiB**, and **data on the rest** (about 40 GiB on a 64 GB card). 16 GiB leaves room for OS upgrades and the later kiosk browser. The data partition holds everything ATLAS writes: releases, audit log, memory database, models.
+This comes before the upgrade on purpose. The root partition the image ships with (about 2.4 GiB) is too small for `apt full-upgrade`, which stops with "You don't have enough free space in /var/cache/apt/archives/". 16 GiB leaves room for OS upgrades and the later kiosk browser. The data partition holds everything ATLAS writes: releases, audit log, memory database, models.
 
 Make sure no ATLAS data exists yet (`ls /var/lib/atlas` should fail or show nothing). Then:
 
@@ -149,6 +122,35 @@ The mount options:
 - `errors=remount-ro` stops writes to a filesystem the kernel already knows is damaged.
 - Journaling mode and write barriers stay at their safe defaults. Don't set `barrier=0` or `data=writeback`.
 
+## 7. Update, install, inventory
+
+Update while the Pi still has normal internet access. After provisioning, root can't reach the internet (PLAN §5.2).
+
+```sh
+sudo apt update && sudo apt full-upgrade -y
+sudo apt install -y nftables python3-venv openssl sudo curl overlayroot ethtool
+sudo reboot
+```
+
+`overlayroot` isn't used until step 11, but it has to be installed now, while apt can still download.
+
+Copy the repository's `deploy/` directory to the Pi (it holds no secrets), then record the inventory (verifies A9 and §0.4):
+
+```sh
+# on the Mac, from the repository
+scp -rq deploy atlas-pi:atlas-deploy
+
+# on the Pi
+sudo ~/atlas-deploy/provisioning/base-os.sh inventory | tee ~/inventory.md
+
+# on the Mac
+scp atlas-pi:inventory.md "docs/inventory/pi-$(date +%F).md"
+```
+
+**The repository is public.** The inventory leaves out MAC addresses, serial numbers, IP addresses and UUIDs, and a test checks that it reads none of them. Don't add them by hand.
+
+**Expect:** `Raspberry Pi 5 Model B`, about 8 GB of RAM (7.9 GiB shown), Debian 13 (trixie), `arm64`, Python 3.13, and `throttled=0x0` (no undervoltage or throttling so far). If any of these differ, stop: the dependency locks are built for exactly this (CLAUDE.md).
+
 ## 8. Fewer card writes, wired only, key-only SSH
 
 ```sh
@@ -164,9 +166,10 @@ It takes the admin user from `sudo` (or from `ATLAS_ADMIN_USER`). It's safe to r
 | Swap in compressed RAM only | `/etc/rpi/swap.conf.d/50-atlas.conf` (`Mechanism=zram`, 2 GiB), and removes an unused `/var/swap` | The default (`auto`, currently `zram+file`) writes idle pages to `/var/swap` on the card *(source-checked: swap.conf(5))*. |
 | No Wi-Fi or Bluetooth | appends `dtoverlay=disable-wifi` and `disable-bt` to `/boot/firmware/config.txt`, under an `[all]` line | ATLAS is wired; fewer radios, less attack surface. If the file ends in a model section such as `[cm5]`, lines appended after it wouldn't apply to a Pi 5; `[all]` makes sure they do. |
 | `/tmp` in RAM | adds a tmpfs line to `/etc/fstab`, only if `/tmp` isn't tmpfs already | Debian 13 usually has it already. |
+| sudo password cached per terminal | `/etc/sudoers.d/020_atlas-tty` (`Defaults timestamp_type=tty`), checked with `visudo` before it's installed | Pi OS ships `010_global-tty` (`timestamp_type=global`): for 15 minutes after you type the sudo password, *every* session of the admin gets root without it, including an SSH login with a stolen key. `020_` is read after `010_`, and the last value wins. |
 | SSH: key only, admin only | `/etc/ssh/sshd_config.d/10-atlas.conf`: no passwords or keyboard-interactive, no root, `AllowUsers <admin>` | Named `10-…` because sshd keeps the *first* value it reads, so it wins over cloud-init's `50-cloud-init.conf`. |
 
-It refuses if the admin has no key in `~/.ssh/authorized_keys` (key-only SSH would lock you out), if the read-only overlay is on (the changes would vanish), or if `sshd -t` rejects the result (it puts the file back and doesn't reload SSH).
+It refuses if the admin has no key in `~/.ssh/authorized_keys` (key-only SSH would lock you out), if the read-only overlay is on (the changes would vanish), or if `sshd -t` rejects the result (it puts the file back and doesn't reload SSH), or if `visudo` rejects the sudoers drop-in.
 
 **Before closing your current session**, check from a second terminal on the Mac:
 
@@ -185,7 +188,7 @@ Then `sudo reboot`, and run `apply` once more after it: a `/var/swap` that was i
 sudo ~/atlas-deploy/provisioning/base-os.sh check
 ```
 
-One `PASS`/`FAIL` line per expectation, exit status 1 if anything fails. It covers steps 5–8: platform (arm64, trixie, Python 3.13, 8 GB, `throttled=0x0`), the packages from step 6, the data partition (ext4 on its own partition, `rw,noatime,commit=60,errors=remount-ro`, in fstab by UUID), zram-only swap, the volatile journal, tmpfs `/tmp`, no Wi-Fi or Bluetooth, sshd's effective settings (`sshd -T`), and the overlay setting in `cmdline.txt`. Until step 11 the overlay shows as a `NOTE`, not a failure. Run it again after step 11, and after every maintenance window.
+One `PASS`/`FAIL` line per expectation, exit status 1 if anything fails. It covers steps 5–8: platform (arm64, trixie, Python 3.13, 8 GB, `throttled=0x0`), the packages from step 7, the data partition (ext4 on its own partition, `rw,noatime,commit=60,errors=remount-ro`, in fstab by UUID), zram-only swap, the volatile journal, tmpfs `/tmp`, no Wi-Fi or Bluetooth, sshd's effective settings (`sshd -T`), sudo's effective settings (`timestamp_type=tty`; no `NOPASSWD` or `!authenticate` for the admin except provisioning's `atlas-release` rule), and the overlay setting in `cmdline.txt`. Until step 11 the overlay shows as a `NOTE`, not a failure. Run it again after step 11, and after every maintenance window.
 
 ## 10. Provision and deploy
 
@@ -251,3 +254,9 @@ Record what actually happened on the hardware here: anything that didn't match t
 
 | Date | Step | Result |
 |---|---|---|
+| 2026-11-20 | 3 | Raspberry Pi OS Lite 64-bit, image dated 2026-10-06, on a 128 GB high-endurance card (119.4 GiB usable). |
+| 2026-11-20 | 4 | The stock `config.txt` ends in an `[all]` section, so `base-os.sh`'s own `[all]` line is redundant but harmless. |
+| 2026-11-20 | 5 | As expected: trixie, aarch64, Python 3.13.5, `p1` 512 MiB vfat, `p2` 2.4 GiB ext4, about 117 GiB free after it (removing ` resize` worked). cloud-init finished. |
+| 2026-11-20 | 5 | `sudo -n` seemed to work without a password from a second SSH session. Cause: Pi OS's `timestamp_type=global` shared the password typed in the first session. No `NOPASSWD` rule exists (user-data has `sudo: null`). `base-os.sh` now sets `timestamp_type=tty`, and `check` verifies it. |
+| 2026-11-20 | 6 | The image's 2.4 GiB root filled up during `apt upgrade` ("not enough free space in /var/cache/apt/archives"), before anything was half-installed. Steps 6 and 7 were swapped so the card layout comes first. Root grown online to 16 GiB (`resizepart` + `resize2fs`, no reboot needed); data partition 103.4 GiB, mounted by itself after the reboot. |
+| 2026-11-20 | 7 | `full-upgrade`: 45 upgraded, kernel 6.18.50 to 6.18.60. With root no longer full, rpi-swap created a 2 GiB `/var/swap` at the next boot; step 8 removes it. `ethtool` is in `/usr/sbin`, so `inventory` without sudo leaves `ethernet` blank. Inventory: [pi-2026-11-21.md](../inventory/pi-2026-11-21.md). |
