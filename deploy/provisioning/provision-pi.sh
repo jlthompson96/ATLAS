@@ -107,6 +107,11 @@ include "/etc/atlas/atlas.nft"'
 # The site file is created from the placeholder example on the first run; the firewall is not loaded until it is edited,
 # and an edited site file that still holds the 2001:db8:: placeholder is refused (known issue D3).
 install_firewall /etc/atlas "$deploy_dir/nftables"
+# The time servers come from the same site file as the firewall rule that allows them. Before the first run creates
+# it (dry run), the example stands in.
+site_file=/etc/atlas/nftables-site.nft
+[ -f "$site_file" ] || site_file="$deploy_dir/nftables/site.nft.example"
+install_timesync "$site_file" /etc/systemd/timesyncd.conf.d/50-atlas.conf
 
 log "== enable units"
 run systemctl daemon-reload

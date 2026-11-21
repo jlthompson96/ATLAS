@@ -433,7 +433,7 @@ def test_only_atlas_egress_reaches_the_internet() -> None:
             and not ln.startswith(('oifname "lo"', "udp sport", "icmpv6"))
         ):
             assert any(
-                tag in ln for tag in ("$LAN_NTP", "$LAN_DNS", "$DESKTOP", "$LAN_BROADCAST", 'skuid "atlas-egress"')
+                tag in ln for tag in ("$NTP_SERVERS", "$LAN_DNS", "$DESKTOP", "$LAN_BROADCAST", 'skuid "atlas-egress"')
             ), ln
 
 
@@ -480,6 +480,11 @@ def test_nft_nonpublic_sets_match_the_proxys_address_policy() -> None:
     assert elements("nonpublic6") == v6_in_global
 
 
+# The one deliberate exception: time.google.com's published anycast addresses, the default NTP_SERVERS (PLAN 5.7), and
+# only in the site example.
+PUBLIC_TIME_SERVERS = {"216.239.35.0", "216.239.35.4", "216.239.35.8", "216.239.35.12"}
+
+
 def test_every_ip_literal_under_deploy_is_a_documentation_or_private_address() -> None:
     """No real addresses anywhere in deploy/: only RFC 5737 / RFC 1918 / loopback / link-local style values."""
     pattern = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
@@ -487,6 +492,8 @@ def test_every_ip_literal_under_deploy_is_a_documentation_or_private_address() -
         if not path.is_file() or path.suffix in (".png",):
             continue
         for match in pattern.findall(path.read_text(encoding="utf-8", errors="ignore")):
+            if path == DEPLOY / "nftables" / "site.nft.example" and match in PUBLIC_TIME_SERVERS:
+                continue
             ip = ipaddress.ip_address(match)
             assert not is_public_address(ip), f"{path.relative_to(REPO)}: {match} looks like a real public address"
 

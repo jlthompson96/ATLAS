@@ -251,7 +251,7 @@ def test_f7_wireguard_is_pinned_by_fwmark_and_ntp_by_user() -> None:
     wg = [ln for ln in out if "udp dport 51820" in ln]
     assert wg == ["meta mark $WG_FWMARK ip daddr $DESKTOP_LAN_IP udp dport 51820 accept"]
     ntp = [ln for ln in out if "udp dport 123" in ln]
-    assert ntp == ["meta skuid $NTP_USER ip daddr $LAN_NTP udp dport 123 accept"]
+    assert ntp == ["meta skuid $NTP_USER ip daddr $NTP_SERVERS udp dport 123 accept"]
     site = (DEPLOY / "nftables" / "site.nft.example").read_text()
     assert 'define NTP_USER = "systemd-timesync"' in site and "define WG_FWMARK = 0x5182" in site
 

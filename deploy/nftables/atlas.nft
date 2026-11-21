@@ -102,8 +102,9 @@ table inet atlas {
         # --- the Pi's own housekeeping --------------------------------------------------------------------------
         udp sport 68 udp dport 67 accept
         icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit } accept
-        # NTP from the LAN time source only (PLAN 5.7: no internet NTP), and only for the time-sync daemon's user.
-        meta skuid $NTP_USER ip daddr $LAN_NTP udp dport 123 accept
+        # NTP only to the fixed time-server addresses in the site file (PLAN 5.7), and only for the time-sync daemon's
+        # user. By IP, so the daemon needs no DNS; provision-pi.sh points timesyncd at the same list.
+        meta skuid $NTP_USER ip daddr $NTP_SERVERS udp dport 123 accept
         # DNS: the LAN resolver, for atlas-egress (it resolves allowlisted names itself and pins the answers) and root.
         # No other ATLAS user may resolve names, so DNS cannot carry exfiltrated data.
         meta skuid "atlas-egress" ip daddr $LAN_DNS udp dport 53 accept
