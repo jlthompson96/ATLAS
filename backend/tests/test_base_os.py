@@ -53,6 +53,8 @@ class Pi:
     sudo_ts: str = "tty"
     sudo_l: str = GOOD_SUDO_L
     visudo_rc: int = 0
+    remount_failed: bool = False
+    ntp_synced: str = "yes"
     throttled: str = "throttled=0x0"
     mem_kb: int = 8_245_000
 
@@ -126,7 +128,11 @@ sshd() {{
   if [ "$1" = -T ]; then cat "{r}/sshd-T"; return 0; fi
   return {pi.sshd_rc}
 }}
-systemctl() {{ echo "systemctl $*" >>"{calls}"; return 0; }}
+systemctl() {{
+  if [ "$1" = is-failed ]; then return {0 if pi.remount_failed else 1}; fi
+  echo "systemctl $*" >>"{calls}"; return 0
+}}
+timedatectl() {{ echo "{pi.ntp_synced}"; }}
 visudo() {{ echo "visudo $1" >>"{calls}"; return {pi.visudo_rc}; }}
 sudo() {{
   case "$1" in
@@ -190,6 +196,8 @@ def test_apply_writes_steps_8_and_9(tmp_path: Path) -> None:
                  "AuthenticationMethods publickey", "AllowUsers admin"):  # fmt: skip
         assert line in sshd
     assert "tmpfs  /tmp  tmpfs  defaults,noatime,mode=1777  0  0" in (pi.etc / "fstab").read_text()
+    remount = (pi.etc / "systemd/system/systemd-remount-fs.service.d/50-atlas-overlay.conf").read_text().splitlines()
+    assert "ConditionPathIsMountPoint=!/media/root-ro" in remount  # skipped only while the overlay is on (P1)
     sudoers = pi.etc / "sudoers.d/020_atlas-tty"  # read after Pi OS's 010_global-tty, so it wins
     assert "Defaults timestamp_type=tty" in sudoers.read_text().splitlines()
     assert sudoers.stat().st_mode & 0o777 == 0o440
@@ -398,6 +406,9 @@ def test_check_passes_on_a_set_up_pi(tmp_path: Path) -> None:
         (lambda pi: setattr(pi, "sshd_t", GOOD_SSHD_T.replace("passwordauthentication no", "passwordauthentication yes")), "passwordauthentication"),
         (lambda pi: setattr(pi, "sshd_t", ""), "sshd -T"),
         (lambda pi: setattr(pi, "sudo_ts", "global"), "timestamp_type"),
+        (lambda pi: setattr(pi, "remount_failed", True), "failed this boot"),
+        (lambda pi: (pi.etc / "systemd/system/systemd-remount-fs.service.d/50-atlas-overlay.conf").unlink(), "missing or changed"),
+        (lambda pi: setattr(pi, "ntp_synced", "no"), "clock synchronized"),
         (lambda pi: setattr(pi, "sudo_l", GOOD_SUDO_L + "    (ALL) NOPASSWD: ALL\n"), "without a password"),
         (lambda pi: setattr(pi, "sudo_l", GOOD_SUDO_L.replace("/usr/local/sbin/atlas-release", "/usr/bin/apt")), "/usr/bin/apt"),
         (lambda pi: setattr(pi, "sudo_l", GOOD_SUDO_L.replace("use_pty,", "use_pty, !authenticate,")), "!authenticate"),
