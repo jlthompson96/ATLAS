@@ -16,6 +16,13 @@ The owner merged C's branch at `68d3945` before the second fix round. The review
 | D1 | Medium | Phase 1 (WireGuard) | `docs/runbooks/` WireGuard and nftables notes | The runbook said `FwMark = 0x5182`, which is wg-quick syntax. services.md puts WireGuard under `systemd-networkd`, where the key is `FirewallMark=`. With the wrong key the nftables mark rule never matches, and the tunnel is silently blocked. **Docs fixed in `5d09422`** (runbook, site example, checklist; test `test_d1_the_wireguard_mark_is_documented_with_the_networkd_key`). | Use `FirewallMark=0x5182` in the `.netdev` file, and check it in the VM. **Still to do:** the VM check (it needs a `wg0` netdev and a loaded ruleset, which would reconfigure the VM's networking). |
 | D4 | Low | — | `deploy/nftables/atlas.nft` | A process that squats a proxy port (3131–3136) while `atlas-egress` is down can still stop it from binding: a denial of service, with no data exposure. `LAN_ROUTER6` is a spoofable link-local source, so it adds little. | Socket-activate the proxy listeners from systemd. |
 
+### From the Pi bring-up (2026-11-20)
+
+| ID | Severity | Blocks | Where | Problem | Agreed fix |
+|---|---|---|---|---|---|
+| P1 | Low | — | `deploy/provisioning/base-os.sh` | With the root overlay on, `systemd-remount-fs.service` fails at every boot: it re-applies the overlay line of overlayroot's generated fstab, and the kernel (6.18) refuses any change to a mounted overlay (`overlay: No changes allowed in reconfigure`). `/` is unaffected, but the unit shows as failed, which would mask a real failure in `systemctl --failed`. | Proposed: `base-os.sh apply` installs a drop-in that skips the unit only while the overlay is on (`ConditionPathIsMountPoint=!/media/root-ro`), so it still runs in a maintenance window. It must be installed with the overlay off. Not decided yet. |
+| P2 | Medium | — | the Pi's clock; `deploy/systemd/` | The Pi 5's RTC has no battery fitted, and with the overlay on, timesyncd's saved clock (`/var/lib/systemd/timesync/clock`) is written to RAM only. After a real power cut, the Pi boots with a stale time until the first NTP sync (seconds, network permitting), so the first audit records, and any TLS check, could see the wrong time. A reboot without power loss is fine (0.2 s off on 2026-11-20). | Fit the official RTC battery, and/or order the ATLAS units after `time-sync.target` with `systemd-time-wait-sync.service` enabled. Not decided yet. |
+
 ### Accepted (no fix planned)
 
 | ID | Note |
