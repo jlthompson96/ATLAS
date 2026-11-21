@@ -404,7 +404,7 @@ If interrupting fails, wake-word detection is muted while ATLAS speaks, and you 
 |---|---|---|
 | 1. boot (FAT) | Firmware, kernel | Read-only in normal operation |
 | 2. root (ext4) | OS only | **Read-only overlay**: runtime writes go to RAM [S21] |
-| 3. data (ext4) | `/var/lib/atlas`: config, credentials, memory DB, queue, audit, and ATLAS code as versioned releases in `releases/` (rev 2.6, so deploys don't need the overlay turned off) | Writable, `noatime,commit=60` |
+| 3. data (ext4) | `/var/lib/atlas`: config, credentials, memory DB, queue, audit, the journal (`logs/`), and ATLAS code as versioned releases in `releases/` (rev 2.6, so deploys don't need the overlay turned off) | Writable, `noatime,commit=60` |
 
 - **Card:** a high-endurance or industrial (pSLC) card of 64 GB or more. Keep a **spare card pre-imaged** with the golden image (No verified source found for specific endurance ratings; compare vendor TBW specs at purchase).
 - **Upgrades:** done in a maintenance window by temporarily disabling the overlay (reboot, upgrade, re-enable) [S21]. The overlay must be `overlayroot=tmpfs:recurse=0`, or it also covers the data partition; raspi-config's switch writes plain `overlayroot=tmpfs` and can't remove the `recurse=0` form, so the commands are in [docs/runbooks/pi-bringup.md](runbooks/pi-bringup.md) §11 (checked against raspi-config 20261026+2, 2026-11-20).
@@ -414,7 +414,7 @@ The rev 1 SSD recommendation (S1) remains the upgrade path if the card wears out
 
 The write-minimization measures apply under every option:
 
-- journald `Storage=volatile`; errors are forwarded to the audit service.
+- journald keeps a **persistent, capped** journal on the data partition: `/var/lib/atlas/logs/journal`, bind-mounted at `/var/log/journal`, at most 256 MB and 30 days. Entries below CRIT reach the card at most every 5 minutes. Errors are also forwarded to the audit service. (Changed 2026-11-20 at the owner's request, so logs survive reboots; it was `Storage=volatile`. Set up by `deploy/provisioning/base-os.sh`.)
 - `/tmp` and STT/TTS scratch space on tmpfs.
 - zram swap only; no disk swap.
 - Metrics kept in RAM ring buffers, persisted hourly.
@@ -821,7 +821,7 @@ The decoys cost credits, but they fit the free-tier budget above.
 
 | Component | CPU (steady / peak) | RAM budget | Disk writes | Notes / priority |
 |---|---|---|---|---|
-| OS, PipeWire, systemd | 3% / 10% | 500 MB | Minimal (volatile journal) | — |
+| OS, PipeWire, systemd | 3% / 10% | 500 MB | Minimal (journal capped at 256 MB) | — |
 | Wake word + VAD (always on) | ≤ 10% of 1 core / same | 150 MB | 0 | Highest priority; audio I/O real-time |
 | STT Moonshine (streaming) | 0 / up to 4 cores during speech | 800 MB (unverified, B1) | 0 (tmpfs) | High |
 | TTS Piper | 0 / 1–4 cores per sentence | 300 MB | 0 | High |
@@ -879,7 +879,7 @@ The decoys cost credits, but they fit the free-tier budget above.
 |---|---|---|
 | microSD (chosen in rev 2) | **≤ 100 MB/day** host writes. A **hard budget**: an alert fires if it is exceeded two days running. This is a design target, not a vendor spec. | `/proc/diskstats` delta over 24 h (B10) |
 | NVMe (S1/S3) | ≤ 2 GB/day (not a concern) | Same |
-| Main contributors | Audit 1–20 MB/day (est.), SQLite WAL checkpoints, queue state transitions, hourly metrics | |
+| Main contributors | Audit 1–20 MB/day (est.), the journal (a few MB/day, est.; B10 measures it), SQLite WAL checkpoints, queue state transitions, hourly metrics | |
 
 ---
 
@@ -1338,7 +1338,7 @@ interface PowerController:       # separate from the backend, so swapping server
 | T7 | **Unauthorized UI access** | LAN attacker, guest, CSRF/cross-site WebSocket | TLS via ATLAS local CA; device pairing (one-time code shown on the kiosk/CLI) → revocable token; Origin checks; CSP `default-src 'self'`; no remote images; step-up PIN for approvals; privacy mode; LAN-only bind; pairing rate limits | Local-only UI | PT-8, UI-SEC-1..4 |
 | T8 | **Interception/spoofing of the Pi↔LLM link** | ARP spoofing, rogue host on the home LAN | WireGuard mutual keys; firewall to the tunnel only; API token; host public key pinned; alert on handshake failure | Encrypted link | PT-10 |
 | T9 | **Wake-on-LAN abuse** | Any LAN device sends magic packets (unauthenticated broadcast); injection triggers repeated wakes; DoS by keeping the host awake | No VLAN in rev 2, so any home-LAN device can send magic packets (impact: power and noise only); NIC wakes on magic packet only; ATLAS wake rate limits + off-hours policy in code (not prompt); unexpected-wake detection (host up without an ATLAS wake → alert); hostd idle-sleep enforcement; all wakes audited | Availability | OW-1..4, RT-12 |
-| T10 | **Physical access to the Pi / microSD.** **Risk raised in rev 2: no disk encryption.** | Theft, card removal or copying, console access | Data minimisation (no email/Discord/calendar bodies at rest; short retention; audit stores hashes only); systemd-creds host-key mode (stops casual exposure only); Google refresh tokens expire within 7 days [S28]; SSH key-only; no auto-login shell; kiosk locked down; Bluetooth/Wi-Fi off if unused; UART console off; Pi out of sight in an enclosure covering the card slot; theft runbook within 1 h (revoke Google grants, reset the Discord bot token, rotate WireGuard and LM Studio keys). USB-keyfile LUKS declined (D17). | Encryption at rest: **not met (user decision)** | PT-9, PT-11 |
+| T10 | **Physical access to the Pi / microSD.** **Risk raised in rev 2: no disk encryption.** | Theft, card removal or copying, console access | Data minimisation (no email/Discord/calendar bodies at rest; short retention; audit stores hashes only; the journal keeps 30 days and never holds private content); systemd-creds host-key mode (stops casual exposure only); Google refresh tokens expire within 7 days [S28]; SSH key-only; no auto-login shell; kiosk locked down; Bluetooth/Wi-Fi off if unused; UART console off; Pi out of sight in an enclosure covering the card slot; theft runbook within 1 h (revoke Google grants, reset the Discord bot token, rotate WireGuard and LM Studio keys). USB-keyfile LUKS declined (D17). | Encryption at rest: **not met (user decision)** | PT-9, PT-11 |
 | T11 | **Ambient audio / self-trigger** | TV says "Hey Atlas, approve…", or ATLAS reads an email aloud containing the wake word | **Voice cannot approve**; wake suppression during TTS unless AEC is verified; transcript shows the source | — | RT-13 |
 | T12 | **LLM host compromise** | A daily-use Windows desktop (browsing, downloads, games) is the most exposed machine in the design | Holds no ATLAS secrets beyond its own WireGuard key; LM Studio outbound blocked; receives only the minimum context; BitLocker recommended; check LM Studio logs for persisted prompts; rotate the WireGuard key if compromised | Data minimization | PT-3 |
 | T13 | **Model misbehaviour** | Hallucinated tool calls, wrong recipient | Schema validation; approvals show the exact payload; recipient allowlist in MVP | — | RT-14 |
@@ -1479,7 +1479,7 @@ All development happens on one Mac (Apple Silicon, `arm64`, macOS). It builds fo
 
 - Hardware inventory of both hosts. This verifies A2, A3, A5, A9 and §0.4.
 - microSD layout per R-STO (rev 2): read-only overlay root and writable data partition, no disk encryption. A spare pre-imaged card.
-- Base hardening: per-service users; SSH key-only; nftables default-deny output; journald volatile; zram; tmpfs.
+- Base hardening: per-service users; SSH key-only; nftables default-deny output; persistent journal capped at 256 MB/30 days on the data partition; zram; tmpfs.
 - Home-LAN network setup per §5.1 (rev 2): router UPnP off, Pi nftables default-deny, optional router rule for the Pi's IP.
 - The `atlas-audit` service: hash chain, checkpoints, and `chattr +a` segments. It is fed by a CLI stub.
 - Backup job, golden image, and recovery-key procedure.

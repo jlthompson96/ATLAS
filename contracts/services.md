@@ -1,6 +1,6 @@
 # ATLAS services, v1
 
-**Schema revision:** 1.1.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
+**Schema revision:** 1.2.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
 
 This file is the single source for service names, Unix users, listeners, secrets and egress allowlists. nftables rules, systemd units, the egress proxy config and the audit `actor` enum are all generated from or checked against it.
 
@@ -166,5 +166,6 @@ StateDirectory=atlas/<name>   # on the data partition, /var/lib/atlas/<name>
   - `current`: symlink to the active release;
   - `previous`: symlink to the release `current` last replaced, for rollback;
   - `incoming`: upload staging for deploys, owned by the admin account;
-  - `credentials`: `LoadCredentialEncrypted=` files, root-only, `credentials/<service>/<name>.cred`.
+  - `credentials`: `LoadCredentialEncrypted=` files, root-only, `credentials/<service>/<name>.cred`;
+  - `logs`: persistent logs, written only by root. `logs/journal` is journald's store, bind-mounted at `/var/log/journal` and capped at 256 MB and 30 days (PLAN §2.7). No service gets write access; services log to stdout/stderr.
 - Each service's runtime dependencies are installed into its release from a lock resolved for Linux `aarch64`, Python 3.13, with `--require-hashes`.

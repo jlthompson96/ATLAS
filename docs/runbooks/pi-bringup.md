@@ -162,14 +162,14 @@ It takes the admin user from `sudo` (or from `ATLAS_ADMIN_USER`). It's safe to r
 
 | What | File | Why |
 |---|---|---|
-| Journal in RAM only | `/etc/systemd/journald.conf.d/50-atlas-volatile.conf` (`Storage=volatile`, 64 MB) | PLAN §2.7. Logs are lost at reboot; errors go to the audit log. |
+| Journal on the data partition, capped | `/etc/systemd/journald.conf.d/50-atlas-journal.conf` (`Storage=persistent`, 256 MB, 30 days, synced every 5 min); creates `/var/lib/atlas/logs/journal` and adds an fstab bind mount of it at `/var/log/journal` | PLAN §2.7. Logs survive reboots (`journalctl -b -1` shows the previous boot) without writing to the read-only root. If the data partition is missing at boot, `nofail` lets the Pi boot with the journal in RAM. |
 | Swap in compressed RAM only | `/etc/rpi/swap.conf.d/50-atlas.conf` (`Mechanism=zram`, 2 GiB), and removes an unused `/var/swap` | The default (`auto`, currently `zram+file`) writes idle pages to `/var/swap` on the card *(source-checked: swap.conf(5))*. |
 | No Wi-Fi or Bluetooth | appends `dtoverlay=disable-wifi` and `disable-bt` to `/boot/firmware/config.txt`, under an `[all]` line | ATLAS is wired; fewer radios, less attack surface. If the file ends in a model section such as `[cm5]`, lines appended after it wouldn't apply to a Pi 5; `[all]` makes sure they do. |
 | `/tmp` in RAM | adds a tmpfs line to `/etc/fstab`, only if `/tmp` isn't tmpfs already | Debian 13 usually has it already. |
 | sudo password cached per terminal | `/etc/sudoers.d/020_atlas-tty` (`Defaults timestamp_type=tty`), checked with `visudo` before it's installed | Pi OS ships `010_global-tty` (`timestamp_type=global`): for 15 minutes after you type the sudo password, *every* session of the admin gets root without it, including an SSH login with a stolen key. `020_` is read after `010_`, and the last value wins. |
 | SSH: key only, admin only | `/etc/ssh/sshd_config.d/10-atlas.conf`: no passwords or keyboard-interactive, no root, `AllowUsers <admin>` | Named `10-…` because sshd keeps the *first* value it reads, so it wins over cloud-init's `50-cloud-init.conf`. |
 
-It refuses if the admin has no key in `~/.ssh/authorized_keys` (key-only SSH would lock you out), if the read-only overlay is on (the changes would vanish), or if `sshd -t` rejects the result (it puts the file back and doesn't reload SSH), or if `visudo` rejects the sudoers drop-in.
+It refuses if the admin has no key in `~/.ssh/authorized_keys` (key-only SSH would lock you out), if the read-only overlay is on (the changes would vanish), if `/var/lib/atlas` isn't mounted (the journal would land on the root filesystem), if fstab already has a different `/var/log/journal` line, or if `sshd -t` rejects the result (it puts the file back and doesn't reload SSH), or if `visudo` rejects the sudoers drop-in.
 
 **Before closing your current session**, check from a second terminal on the Mac:
 
@@ -188,7 +188,7 @@ Then `sudo reboot`, and run `apply` once more after it: a `/var/swap` that was i
 sudo ~/atlas-deploy/provisioning/base-os.sh check
 ```
 
-One `PASS`/`FAIL` line per expectation, exit status 1 if anything fails. It covers steps 5–8: platform (arm64, trixie, Python 3.13, 8 GB, `throttled=0x0`), the packages from step 7, the data partition (ext4 on its own partition, `rw,noatime,commit=60,errors=remount-ro`, in fstab by UUID), zram-only swap, the volatile journal, tmpfs `/tmp`, no Wi-Fi or Bluetooth, sshd's effective settings (`sshd -T`), sudo's effective settings (`timestamp_type=tty`; no `NOPASSWD` or `!authenticate` for the admin except provisioning's `atlas-release` rule), and the overlay setting in `cmdline.txt`. Until step 11 the overlay shows as a `NOTE`, not a failure. Run it again after step 11, and after every maintenance window.
+One `PASS`/`FAIL` line per expectation, exit status 1 if anything fails. It covers steps 5–8: platform (arm64, trixie, Python 3.13, 8 GB, `throttled=0x0`), the packages from step 7, the data partition (ext4 on its own partition, `rw,noatime,commit=60,errors=remount-ro`, in fstab by UUID), zram-only swap, the journal (persistent, 256 MB, 30 days, bind-mounted from the data partition), tmpfs `/tmp`, no Wi-Fi or Bluetooth, sshd's effective settings (`sshd -T`), sudo's effective settings (`timestamp_type=tty`; no `NOPASSWD` or `!authenticate` for the admin except provisioning's `atlas-release` rule), and the overlay setting in `cmdline.txt`. Until step 11 the overlay shows as a `NOTE`, not a failure. Run it again after step 11, and after every maintenance window.
 
 ## 10. Provision and deploy
 
