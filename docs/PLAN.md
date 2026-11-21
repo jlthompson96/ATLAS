@@ -1053,7 +1053,7 @@ The mic level (listening state) streams live, so it is jitter-exposed. Target �
 
 | Panel | Data source (all local) | Sensitivity | Default | Privacy-mode behaviour |
 |---|---|---|---|---|
-| Clock/date | Pi clock (LAN NTP only) | public | On | Visible |
+| Clock/date | Pi clock (NTP to fixed time-server addresses only) | public | On | Visible |
 | Weather | Open-Meteo via the egress gateway, rounded coordinates (§2.15) [S47]; optional indoor sensor | public | On | Visible |
 | System health (both hosts) | `/proc`, vcgencmd, `atlas-hostd` (NVML) | public | On | Visible |
 | Host power/link | atlas-core power controller, WireGuard | public | On | Visible |
@@ -1125,7 +1125,7 @@ WoL then needs both hosts on the **same L2 segment**, or a router that forwards 
 
 1. **nftables `output` policy drop.** Allowed traffic:
    - loopback;
-   - the LAN resolver (DNS) and LAN NTP;
+   - the LAN resolver (DNS), and NTP to the fixed time-server addresses (§5.7);
    - the WireGuard peer;
    - the WoL broadcast;
    - `meta skuid atlas-egress` → TCP 443 (and 80 for research) to **non-private** addresses.
@@ -1297,7 +1297,7 @@ The host sleeps **only if all of the following hold:**
 
 ### 5.7 Time and DNS
 
-- NTP is served only from the LAN (router or Pi chrony) with no internet NTP. The Pi 5's onboard RTC (verify) keeps the off-hours scheduling correct across power loss.
+- NTP goes only to fixed time-server addresses, by IP and without DNS: `time.google.com`'s four (216.239.35.0/4/8/12) by default, set as `NTP_SERVERS` in the firewall's site file. Only the time daemon's user may send it. (Changed 2026-11-20: the plan said LAN NTP only, but the home router serves no NTP; the owner chose Google by IP.) The Pi 5's onboard RTC keeps time across power loss only with its optional battery fitted; without one the clock is wrong after a power cut until the first sync.
 - DNS uses only the LAN resolver. `atlas-egress` resolves names itself and pins the resolved IPs.
 
 ### 5.8 LLM backend abstraction

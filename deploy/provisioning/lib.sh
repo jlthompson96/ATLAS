@@ -168,6 +168,36 @@ install_firewall() {
   fi
 }
 
+# ntp_servers SITE: the addresses in SITE's NTP_SERVERS set, space-separated. Fails unless there is at least one and
+# each is plain IPv4 text, because timesyncd gets the same list.
+ntp_servers() {
+  local set addr out=""
+  set="$(sed -n 's/^[[:space:]]*define[[:space:]][[:space:]]*NTP_SERVERS[[:space:]]*=[[:space:]]*{\([^}]*\)}.*/\1/p' "$1" |
+    head -1)"
+  for addr in ${set//,/ }; do
+    [[ "$addr" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+    out="$out $addr"
+  done
+  [ -n "$out" ] || return 1
+  printf '%s\n' "${out# }"
+}
+
+# install_timesync SITE DST: point systemd-timesyncd at SITE's NTP_SERVERS, the only time servers the firewall lets it
+# reach (PLAN 5.7), via the drop-in DST. Restarts timesyncd only when the list changes.
+install_timesync() {
+  local site="$1" dst="$2" servers content
+  servers="$(ntp_servers "$site")" ||
+    die "$site: NTP_SERVERS must be a set of plain IPv4 addresses, such as { 198.51.100.123, 198.51.100.124 }"
+  content="$(printf '%s\n' "# ATLAS: the time servers the firewall allows (NTP_SERVERS in $site). Managed by provision-pi.sh." \
+    "[Time]" "NTP=$servers" "FallbackNTP=")"
+  if [ -f "$dst" ] && [ "$(cat "$dst")" = "$content" ]; then
+    log "ok      $dst"
+    return 0
+  fi
+  write_file "$dst" 644 "$content"
+  run systemctl try-restart systemd-timesyncd.service
+}
+
 # service_list FILE: names of the Pi services in services.conf (comments and blanks skipped).
 service_list() {
   awk '!/^[[:space:]]*(#|$)/ { print $1 }' "$1"
