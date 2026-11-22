@@ -21,7 +21,7 @@ from atlas.audit.record import record_hash
 from atlas.audit.segments import SEGMENT_RE, list_segments
 from atlas.audit.server import AuditServer
 from atlas.audit.verify import outcome_unknown_in_dir, verify_dir
-from tests.conftest import Clock, tool_call, write_ahead
+from tests.conftest import Clock, service_event, tool_call, write_ahead
 from tests.test_audit_server import FakeCreds, FakeUsers, line, raw_exchange
 
 MakeLog = Callable[..., AuditLog]
@@ -272,7 +272,7 @@ def test_f4_io_error_after_the_write_started_poisons_and_asks_for_a_restart(
                     raise OSError(5, "I/O error")
 
                 monkeypatch.setattr(audit_log_module.os, "write", boom)
-                [reply] = await raw_exchange(sock, line({"op": "append", "record": tool_call()}))
+                [reply] = await raw_exchange(sock, line({"op": "append", "record": service_event()}))
                 assert reply == {"ok": False, "code": "AUDIT_UNAVAILABLE"}
                 assert server.fatal.is_set()  # the service exits non-zero; systemd restarts and re-validates
                 assert log.failed

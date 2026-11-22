@@ -20,7 +20,7 @@ from atlas.audit.peercred import KernelPeerCredentials, PeerCredentialError, Soc
 from atlas.audit.segments import list_segments
 from atlas.audit.server import AuditServer
 from atlas.audit.verify import verify_dir
-from tests.conftest import egress_body, tool_call, write_ahead
+from tests.conftest import egress_body, service_event, tool_call, write_ahead
 
 MakeLog = Callable[..., AuditLog]
 
@@ -102,8 +102,8 @@ def test_actor_comes_from_peer_credentials(make_log: MakeLog, sock_path: Path) -
         server, creds = make_server(log)
         await server.listen_path(sock_path)
         try:
-            creds.uid = 1004  # atlas-panels
-            [reply] = await raw_exchange(sock_path, line({"op": "append", "record": tool_call()}))
+            creds.uid = 1004  # atlas-panels: tool_call belongs to atlas-core, so send a record panels may write
+            [reply] = await raw_exchange(sock_path, line({"op": "append", "record": service_event()}))
             assert reply["ok"] is True
             assert stored_actor(log, reply["seq"]) == "atlas-panels"
         finally:

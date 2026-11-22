@@ -2,7 +2,7 @@
 
 **Targets:** `events.v1.schema.json` (1.1.0), `audit-record.v1.schema.json` (1.1.0), `services.md` (1.1.0).
 **Author:** security-core agent.
-**Status:** proposed.
+**Status:** proposed. Item 2 was superseded by `2026-11-22-audit-actor-pinning.md` (approved, audit-record.v1 1.2.0).
 
 The Phase 1 security core (docs/adr/0001-privilege-model.md) works within the current contracts. Nothing below blocks it. Each item closes a gap that is only enforced by convention today.
 

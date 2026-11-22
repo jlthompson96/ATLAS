@@ -53,15 +53,57 @@ CONTEXTS: Final = ("interactive", "unattended", "quarantined", "system")
 
 # Kinds only atlas-audit itself may create (never accepted from a client).
 INTERNAL_KINDS: Final = frozenset({"genesis", "purge", "checkpoint"})
-# Kinds whose schema pins the actor (allOf in the schema).
-KIND_ACTOR: Final = {
-    "genesis": "atlas-audit",
-    "approval": "atlas-core",
-    "write_ahead": "atlas-executor",
-    "write_result": "atlas-executor",
-    "egress": "atlas-egress",
-    "purge": "atlas-audit",
-    "checkpoint": "atlas-audit",
+# Who may write what (allOf in the schema; rev 1.2.0, proposal 2026-11-22-audit-actor-pinning). A kind listed in
+# KIND_ACTORS is pinned whatever its event. For auth and system, EVENT_ACTORS pins single events; an event in neither
+# table (system service_start, service_stop, error_forwarded) may come from any service, because it describes the
+# writer itself.
+_CORE: Final = frozenset({"atlas-core"})
+_AUDIT: Final = frozenset({"atlas-audit"})
+_EXECUTOR: Final = frozenset({"atlas-executor"})
+KIND_ACTORS: Final[dict[str, frozenset[str]]] = {
+    "genesis": _AUDIT,
+    "tool_call": _CORE,
+    "action_proposed": _CORE,
+    "approval": _CORE,
+    "write_ahead": _EXECUTOR,
+    "write_result": _EXECUTOR,
+    "egress": frozenset({"atlas-egress"}),
+    "power": _CORE,
+    "config": frozenset({"atlas-core", "atlas-ui"}),
+    "purge": _AUDIT,
+    "checkpoint": _AUDIT,
+}
+_UI: Final = frozenset({"atlas-ui"})
+EVENT_ACTORS: Final[dict[str, dict[str, frozenset[str]]]] = {
+    "auth": {
+        "device_paired": _UI,
+        "device_revoked": _UI,
+        "ws_rejected": _UI,
+        "stepup_verified": _UI,
+        "stepup_failed": _UI,
+        "portfolio_unlocked": frozenset({"atlas-market"}),
+        "portfolio_unlock_failed": frozenset({"atlas-market"}),
+        "oauth_renewed": frozenset({"atlas-google", "atlas-executor"}),
+        "oauth_expired": frozenset({"atlas-google", "atlas-executor"}),
+    },
+    "system": {
+        "chain_verified": _AUDIT,
+        "chain_broken": _AUDIT,
+        "retention_run": _AUDIT,
+        "killswitch": _CORE,
+        "task_killed": _CORE,
+    },
+}
+# auth credential_rotated: any service, for one of its own credentials only (contracts/services.md section 4;
+# test_audit_record.py checks this table against that file and against the schema).
+SERVICE_CREDENTIALS: Final[dict[str, frozenset[str]]] = {
+    "atlas-core": frozenset({"lmstudio-api-token", "approval-signing-key"}),
+    "atlas-ui": frozenset({"tls-key", "device-token-key", "stepup-pin-hash"}),
+    "atlas-audit": frozenset({"audit-checkpoint-key", "audit-segment-master-key"}),
+    "atlas-google": frozenset({"google-oauth-client", "google-read-refresh-token"}),
+    "atlas-discord": frozenset({"discord-reader-bot-token"}),
+    "atlas-executor": frozenset({"google-oauth-client", "google-send-refresh-token", "discord-poster-bot-token"}),
+    "atlas-market": frozenset({"twelvedata-api-key"}),
 }
 # Kinds acknowledged only after fsync (PLAN 2.12: write actions are write-ahead logged; the rest of
 # these are low-volume, security-relevant records that should survive a power cut).
@@ -436,9 +478,7 @@ def validate_record(record: Any) -> list[str]:
     errors += [
         f"record.{name}: required for kind {kind}" for name in _KIND_REQUIRED.get(kind, ()) if name not in record
     ]
-    pinned_actor = KIND_ACTOR.get(kind)
-    if pinned_actor is not None and record.get("actor") != pinned_actor:
-        errors.append(f"record.actor: kind {kind} requires {pinned_actor}")
+    errors += [f"record.{e}" for e in actor_errors(kind, record, record.get("actor"))]
     action = record.get("action")
     if isinstance(action, dict):
         errors += [
@@ -478,7 +518,38 @@ def validate_submission(body: Any, peer_actor: str) -> list[str]:
     for name in INTERNAL_KINDS:  # the matching sub-objects are internal too
         if name in body:
             errors.append(f"{name}: written by atlas-audit only")
-    pinned = KIND_ACTOR.get(kind) if isinstance(kind, str) else None
-    if pinned is not None and peer_actor != pinned:
-        errors.append(f"actor: kind {kind} may only be submitted by {pinned}")
+    if isinstance(kind, str):
+        errors += actor_errors(kind, body, peer_actor)
     return errors
+
+
+def _sub_event(record: dict[str, Any], kind: str) -> Any:
+    sub = record.get(kind)
+    return sub.get("event") if isinstance(sub, dict) else None
+
+
+def actor_errors(kind: str, record: dict[str, Any], actor: Any) -> list[str]:
+    """The ways ``actor`` may not write this ``kind`` (and auth/system event) of ``record``: the schema's actor pins.
+
+    A missing or malformed sub-object is left to the shape checks; only a recognised event is pinned, exactly as the
+    schema's ``if`` branches only match a recognised event.
+    """
+    # Anything read from a record may be any JSON value; only strings are looked up, so a list never raises here.
+    name = actor if isinstance(actor, str) else None
+    event = _sub_event(record, kind)
+    event = event if isinstance(event, str) else None
+    allowed = KIND_ACTORS.get(kind)
+    if allowed is None and kind in EVENT_ACTORS and event is not None:
+        allowed = EVENT_ACTORS[kind].get(event)
+    if allowed is not None:
+        if name not in allowed:
+            return [f"actor: kind {kind} may only be written by {', '.join(sorted(allowed))}"]
+        return []
+    if kind == "auth" and event == "credential_rotated":
+        subject = record["auth"].get("subject")
+        if subject is None:
+            return ["auth.subject: required for credential_rotated"]
+        own = SERVICE_CREDENTIALS.get(name, frozenset()) if name is not None else frozenset()
+        if not isinstance(subject, str) or subject not in own:
+            return ["actor: credential_rotated may only name one of the writer's own credentials"]
+    return []
