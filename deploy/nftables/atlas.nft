@@ -13,7 +13,7 @@
 #    SO_PEERCRED, so the port identifies the caller, and this is what makes that true);
 #  - DNS only for atlas-egress (and root), only to the LAN resolver, so a compromised service cannot use DNS
 #    as an exfiltration channel;
-#  - SSH in from the admin device only; the UI on :443 from the LAN only.
+#  - SSH and the UI on :443 in from the LAN only.
 
 include "/etc/atlas/nftables-site.nft"
 
@@ -48,8 +48,9 @@ table inet atlas {
         ct state established,related accept
         ct state invalid drop
 
-        # SSH: the admin device only (key-only, passphrase-protected key; deploys use this path).
-        ip saddr $ADMIN_IP tcp dport 22 accept
+        # SSH: any device on the home LAN (owner's decision 2026-11-22, so a changed DHCP address can't lock the admin
+        # out). sshd is key-only, admin-only and no root (base-os.sh); deploys use this path.
+        ip saddr $LAN_CIDR tcp dport 22 accept
 
         # HUD: HTTPS and WSS from the home LAN (tighten to listed device IPs in site.nft if wanted).
         ip saddr $LAN_CIDR tcp dport 443 accept

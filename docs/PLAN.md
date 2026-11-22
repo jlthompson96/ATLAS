@@ -1101,7 +1101,7 @@ The mic level (listening state) streams live, so it is jitter-exposed. Target �
 | Flow | Policy (rev 2) |
 |---|---|
 | home LAN → Pi :443 (UI) | Allow (optionally only from listed device IPs) |
-| home LAN → Pi :22 | Allow from the admin device only: the development Mac (§7.0) |
+| home LAN → Pi :22 | Allow from the whole LAN (changed 2026-11-22 at the owner's request: it was the admin device only, and a changed DHCP address locked the Mac out). sshd is key-only, admin-only, no root; the admin key lives only on the development Mac (§7.0). |
 | Pi ↔ desktop | UDP 51820 (WireGuard) + WoL broadcast. LM Studio's port is reachable only inside the tunnel (Windows Defender Firewall rule). |
 | Pi → Internet | Pi nftables: only `atlas-egress` may connect out (§5.2). Optional router rule limiting the Pi's IP to ports 80/443. |
 | Desktop → Internet | Unrestricted for you. **LM Studio, llmster, `llama-server` and `atlas-hostd` are blocked outbound** by program rules, except in maintenance mode. |
@@ -1468,7 +1468,7 @@ All development happens on one Mac (Apple Silicon, `arm64`, macOS). It builds fo
 
 **The Mac is part of the trust boundary:**
 
-- **Admin device.** It's the only device allowed to SSH to the Pi (§5.1). Use an SSH key with a passphrase, and keep FileVault on.
+- **Admin device.** It holds the only key that can log in to the Pi over SSH (the firewall admits SSH from the whole LAN, §5.1). Use an SSH key with a passphrase, and keep FileVault on.
 - **Supply chain.** It builds everything that runs on the Pi, so a compromised development dependency is a supply-chain risk (T6). Keep development tooling pinned and separate from the dependencies that ship.
 - **No real secrets or personal data on the Mac or in the repo.** Development uses fake credentials and synthetic data. Real OAuth tokens, the Discord bot token and the Twelve Data key are created and stored only on the Pi.
 

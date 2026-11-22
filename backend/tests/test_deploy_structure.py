@@ -443,9 +443,9 @@ def test_dns_is_only_for_atlas_egress_and_root_and_only_to_the_lan_resolver() ->
     assert all("$LAN_DNS" in ln and ('skuid "atlas-egress"' in ln or 'skuid "root"' in ln) for ln in dns)
 
 
-def test_ssh_only_from_the_admin_device() -> None:
+def test_ssh_only_from_the_lan() -> None:
     ssh = [ln for ln in chain("input") if "dport 22" in ln]
-    assert ssh == ["ip saddr $ADMIN_IP tcp dport 22 accept"]
+    assert ssh == ["ip saddr $LAN_CIDR tcp dport 22 accept"]
 
 
 def test_wireguard_wol_and_tunnel_rules() -> None:

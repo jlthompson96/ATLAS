@@ -18,7 +18,7 @@ Facts marked *(source-checked)* were read from the Raspberry Pi OS Trixie packag
 | Ethernet cable to the same router or switch as the Windows desktop | ? | A5: Wake-on-LAN needs both on one LAN segment. No Wi-Fi: step 8 turns it off. |
 | An SD card reader on the Mac | ? | |
 | **Raspberry Pi Imager 2.0 or later** on the Mac | | Imager 1.x doesn't apply its settings to Trixie images and fails without telling you. |
-| A micro-HDMI cable, a screen and a USB keyboard | Needed later | Console access for provisioning: a wrong admin IP in the firewall locks SSH out. |
+| A micro-HDMI cable, a screen and a USB keyboard | Needed later | Console access for provisioning: a wrong LAN range in the firewall locks SSH out. |
 | Admin access to your router | | To reserve IP addresses and check that UPnP is off. |
 
 ## 2. Decide these before you start
@@ -30,7 +30,7 @@ Facts marked *(source-checked)* were read from the Raspberry Pi OS Trixie packag
 | Admin password | long and random, kept in your password manager | Only for `sudo` at the console. SSH won't accept passwords. |
 | SSH key | a dedicated key: `ssh-keygen -t ed25519 -f ~/.ssh/atlas-pi -C atlas-pi-admin` | Give it a passphrase. Only the `.pub` half ever leaves the Mac. |
 | Pi's LAN IP | reserve one in the router (DHCP reservation) after first boot | Goes into the firewall's site file. |
-| Mac's LAN IP | reserve one too | The firewall allows SSH only from this address (`ADMIN_IP`). If the Mac's address changes, you're locked out of SSH. |
+| Mac's LAN IP | reserving one is optional | The firewall allows SSH from any address on the LAN (`LAN_CIDR`), so a changed address doesn't lock you out. Only your key can log in. |
 
 ## 3. Flash the card
 
