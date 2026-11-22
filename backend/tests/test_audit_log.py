@@ -19,7 +19,7 @@ from atlas.audit.log import AuditConfig, AuditCorrupt, AuditLog, AuditUnavailabl
 from atlas.audit.record import record_hash
 from atlas.audit.segments import list_segments, parse_record_line
 from atlas.audit.verify import VerifyReport, verify_dir
-from tests.conftest import Clock, egress_body, tool_call, write_ahead, write_result
+from tests.conftest import Clock, egress_body, service_event, tool_call, write_ahead, write_result
 
 MakeLog = Callable[..., AuditLog]
 
@@ -70,7 +70,7 @@ def test_actor_is_set_by_the_service_not_the_body(make_log: MakeLog) -> None:
     with pytest.raises(SubmissionRejected) as exc:
         log.append("atlas-panels", {**tool_call(), "actor": "atlas-core"})
     assert exc.value.code == "ACTOR_MISMATCH"
-    done = log.append("atlas-panels", tool_call())
+    done = log.append("atlas-panels", service_event())
     rec = parse_record_line(list_segments(log.data_dir)[0][1].read_bytes().splitlines()[done.seq])
     assert rec["actor"] == "atlas-panels"
     assert log.head[0] == done.seq  # the rejected record consumed no seq

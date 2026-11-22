@@ -37,6 +37,25 @@ python -m atlas.audit verify /path/to/copy --pubkey /safe/checkpoint.pub --expec
 
 `--expect-head` fails if the log is shorter than that point or has a different record there; it is the only check that catches a rollback to a genuine earlier state. `--expect-genesis` fails if the chain was replaced by a new one. After a retention purge has removed the genesis record it can no longer be compared directly; `verify` then prints a warning and relies on the signed purge anchor, which is why it must be combined with `--pubkey`. Without `--pubkey`, the verifier trusts the `checkpoint.pub` next to the data, which an attacker with write access could replace, and it does not require a signed checkpoint.
 
+## Who may write what (audit-record.v1 1.2.0)
+
+`actor` comes from the socket's peer credentials, and each kind, or for `auth` and `system` each event, may only come from the services that own it. The audit service refuses anything else (`BAD_RECORD`, nothing written), and `verify` reports any such record already in a log as an error.
+
+| Records | Writers |
+|---|---|
+| `genesis`, `purge`, `checkpoint`; `system` `chain_verified`, `chain_broken`, `retention_run` | atlas-audit (the first three are never accepted from a client) |
+| `tool_call`, `action_proposed`, `approval`, `power`; `system` `killswitch`, `task_killed` | atlas-core |
+| `config` | atlas-core, atlas-ui |
+| `write_ahead`, `write_result` | atlas-executor |
+| `egress` | atlas-egress |
+| `auth` `device_paired`, `device_revoked`, `ws_rejected`, `stepup_verified`, `stepup_failed` | atlas-ui |
+| `auth` `portfolio_unlocked`, `portfolio_unlock_failed` | atlas-market |
+| `auth` `oauth_renewed`, `oauth_expired` | atlas-google, atlas-executor |
+| `auth` `credential_rotated` | any service, naming one of its own credentials (services.md §4) |
+| `system` `service_start`, `service_stop`, `error_forwarded` | any service (they describe the writer) |
+
+This stops a service from writing records it doesn't own, but it can't check that a record is true: a compromised atlas-ui can still write a false `device_paired`. The table lives in `backend/atlas/audit/record.py` and the schema's `allOf`, and tests keep the two, and services.md §4, in step.
+
 ## Outcome unknown (FI-3)
 
 A `write_ahead` with no `write_result` after a crash means the action may or may not have happened. It is listed by `verify` as `OUTCOME_UNKNOWN`, and by `python -m atlas.audit outcome-unknown <dir>` (JSON lines). The executor and core can ask the running service over the socket (`{"op":"outcome_unknown"}`). It must be surfaced to the user and **never retried automatically**.

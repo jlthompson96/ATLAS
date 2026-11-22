@@ -45,6 +45,11 @@ def tool_call(i: int = 0) -> Body:
     }
 
 
+def service_event(event: str = "service_start") -> Body:
+    """A record every service may write (audit-record.v1 1.2.0 pins most other kinds to one writer)."""
+    return {"kind": "system", "context": "system", "system": {"event": event}}
+
+
 def write_ahead(approval: str = "apr-1", tool: str = "gmail.send") -> Body:
     return {
         "kind": "write_ahead",

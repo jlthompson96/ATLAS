@@ -3,7 +3,7 @@
   "$id": "urn:atlas:contracts:audit-record:v1",
   "title": "ATLAS audit record, v1",
   "description": "One line of an atlas-audit JSONL segment. Source: PLAN.md §2.12. Hashing: hash = lowercase hex SHA-256 of the RFC 8785 (JCS) serialization of the record with the 'hash' member removed. prev_hash is the previous record's hash; the genesis record uses 64 zeros. No floating-point numbers anywhere in a record (they make canonical serialization fragile), so every numeric field is an integer. Records hold resource IDs, byte counts and SHA-256 hashes, never private content (D7).",
-  "x-atlas-schema-revision": "1.1.0",
+  "x-atlas-schema-revision": "1.2.0",
   "type": "object",
   "additionalProperties": false,
   "required": ["v", "seq", "ts", "kind", "actor", "context", "prev_hash", "hash"],
@@ -23,7 +23,7 @@
         "atlas-google", "atlas-discord", "atlas-executor", "atlas-panels", "atlas-market",
         "atlas-search", "atlas-fallback"
       ],
-      "description": "The service that submitted the record, from its Unix socket peer credentials (SO_PEERCRED), never from the message body. See contracts/services.md."
+      "description": "The service that submitted the record, from its Unix socket peer credentials (SO_PEERCRED), never from the message body. See contracts/services.md. Most kinds, and some auth and system events, may only be written by specific services: see allOf."
     },
     "context": {
       "enum": ["interactive", "unattended", "quarantined", "system"],
@@ -68,9 +68,9 @@
     { "if": { "properties": { "kind": { "const": "genesis" } } },
       "then": { "required": ["genesis"], "properties": { "seq": { "const": 0 }, "prev_hash": { "const": "0000000000000000000000000000000000000000000000000000000000000000" }, "actor": { "const": "atlas-audit" } } } },
     { "if": { "properties": { "kind": { "const": "tool_call" } } },
-      "then": { "required": ["tool", "args_redacted", "data_accessed", "result"] } },
+      "then": { "required": ["tool", "args_redacted", "data_accessed", "result"], "properties": { "actor": { "const": "atlas-core" } } } },
     { "if": { "properties": { "kind": { "const": "action_proposed" } } },
-      "then": { "required": ["tool", "action"], "properties": { "action": { "required": ["tainted"] } } } },
+      "then": { "required": ["tool", "action"], "properties": { "actor": { "const": "atlas-core" }, "action": { "required": ["tainted"] } } } },
     { "if": { "properties": { "kind": { "const": "approval" } } },
       "then": { "required": ["action", "device_id"], "properties": { "actor": { "const": "atlas-core" }, "action": { "required": ["decision", "step_up", "approval_id"] } } } },
     { "if": { "properties": { "kind": { "const": "write_ahead" } } },
@@ -83,10 +83,37 @@
       "then": { "required": ["tool", "action", "result"], "properties": { "actor": { "const": "atlas-executor" }, "action": { "required": ["approval_id"] } } } },
     { "if": { "properties": { "kind": { "const": "egress" } } },
       "then": { "required": ["egress", "result"], "properties": { "actor": { "const": "atlas-egress" } } } },
-    { "if": { "properties": { "kind": { "const": "power" } } }, "then": { "required": ["power"] } },
+    { "if": { "properties": { "kind": { "const": "power" } } },
+      "then": { "required": ["power"], "properties": { "actor": { "const": "atlas-core" } } } },
     { "if": { "properties": { "kind": { "const": "auth" } } }, "then": { "required": ["auth", "result"] } },
-    { "if": { "properties": { "kind": { "const": "config" } } }, "then": { "required": ["config"] } },
+    { "if": { "properties": { "kind": { "const": "config" } } },
+      "then": { "required": ["config"], "properties": { "actor": { "enum": ["atlas-core", "atlas-ui"] } } } },
     { "if": { "properties": { "kind": { "const": "system" } } }, "then": { "required": ["system"] } },
+    { "$comment": "Event-level actor pins (rev 1.2.0, proposal 2026-11-22-audit-actor-pinning). Events not listed here (system service_start, service_stop, error_forwarded) may be written by any service: they describe the writer itself.",
+      "if": { "required": ["auth"], "properties": { "kind": { "const": "auth" }, "auth": { "required": ["event"], "properties": { "event": { "enum": ["device_paired", "device_revoked", "ws_rejected", "stepup_verified", "stepup_failed"] } } } } },
+      "then": { "properties": { "actor": { "const": "atlas-ui" } } } },
+    { "if": { "required": ["auth"], "properties": { "kind": { "const": "auth" }, "auth": { "required": ["event"], "properties": { "event": { "enum": ["portfolio_unlocked", "portfolio_unlock_failed"] } } } } },
+      "then": { "properties": { "actor": { "const": "atlas-market" } } } },
+    { "if": { "required": ["auth"], "properties": { "kind": { "const": "auth" }, "auth": { "required": ["event"], "properties": { "event": { "enum": ["oauth_renewed", "oauth_expired"] } } } } },
+      "then": { "properties": { "actor": { "enum": ["atlas-google", "atlas-executor"] } } } },
+    { "$comment": "credential_rotated: any service, but only for one of its own credentials (contracts/services.md section 4; a contract test keeps these lists equal to that table).",
+      "if": { "required": ["auth"], "properties": { "kind": { "const": "auth" }, "auth": { "required": ["event"], "properties": { "event": { "const": "credential_rotated" } } } } },
+      "then": {
+        "properties": { "auth": { "required": ["subject"] } },
+        "anyOf": [
+          { "properties": { "actor": { "const": "atlas-core" }, "auth": { "properties": { "subject": { "enum": ["lmstudio-api-token", "approval-signing-key"] } } } } },
+          { "properties": { "actor": { "const": "atlas-ui" }, "auth": { "properties": { "subject": { "enum": ["tls-key", "device-token-key", "stepup-pin-hash"] } } } } },
+          { "properties": { "actor": { "const": "atlas-audit" }, "auth": { "properties": { "subject": { "enum": ["audit-checkpoint-key", "audit-segment-master-key"] } } } } },
+          { "properties": { "actor": { "const": "atlas-google" }, "auth": { "properties": { "subject": { "enum": ["google-oauth-client", "google-read-refresh-token"] } } } } },
+          { "properties": { "actor": { "const": "atlas-discord" }, "auth": { "properties": { "subject": { "enum": ["discord-reader-bot-token"] } } } } },
+          { "properties": { "actor": { "const": "atlas-executor" }, "auth": { "properties": { "subject": { "enum": ["google-oauth-client", "google-send-refresh-token", "discord-poster-bot-token"] } } } } },
+          { "properties": { "actor": { "const": "atlas-market" }, "auth": { "properties": { "subject": { "enum": ["twelvedata-api-key"] } } } } }
+        ]
+      } },
+    { "if": { "required": ["system"], "properties": { "kind": { "const": "system" }, "system": { "required": ["event"], "properties": { "event": { "enum": ["chain_verified", "chain_broken", "retention_run"] } } } } },
+      "then": { "properties": { "actor": { "const": "atlas-audit" } } } },
+    { "if": { "required": ["system"], "properties": { "kind": { "const": "system" }, "system": { "required": ["event"], "properties": { "event": { "enum": ["killswitch", "task_killed"] } } } } },
+      "then": { "properties": { "actor": { "const": "atlas-core" } } } },
     { "if": { "properties": { "kind": { "const": "purge" } } },
       "then": { "required": ["purge"], "properties": { "actor": { "const": "atlas-audit" } } } },
     { "if": { "properties": { "kind": { "const": "checkpoint" } } },
@@ -179,7 +206,7 @@
       "required": ["event"],
       "properties": {
         "event": { "enum": ["device_paired", "device_revoked", "ws_rejected", "stepup_verified", "stepup_failed", "portfolio_unlocked", "portfolio_unlock_failed", "oauth_renewed", "oauth_expired", "credential_rotated"] },
-        "subject": { "type": "string", "maxLength": 64, "description": "Which credential or grant, e.g. google-read, discord-reader. Never the secret itself." }
+        "subject": { "type": "string", "maxLength": 64, "description": "Which credential or grant, e.g. google-read, discord-reader. For credential_rotated, the credential name from contracts/services.md section 4, which must be one of the writer's own. Never the secret itself." }
       }
     },
     "Config": {

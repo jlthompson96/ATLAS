@@ -14,7 +14,11 @@ from jsonschema import Draft202012Validator
 from atlas.audit import jcs
 from atlas.audit.record import (
     ACTORS,
+    EVENT_ACTORS,
+    KIND_ACTORS,
+    SERVICE_CREDENTIALS,
     ZERO_HASH,
+    actor_errors,
     record_hash,
     validate_record,
     validate_submission,
@@ -165,8 +169,145 @@ def test_submission_cannot_create_internal_kinds(kind: str) -> None:
         ("write_ahead", "atlas-core", "atlas-executor"),
         ("write_result", "atlas-google", "atlas-executor"),
         ("egress", "atlas-google", "atlas-egress"),
+        ("tool_call", "atlas-discord", "atlas-core"),
+        ("action_proposed", "atlas-research", "atlas-core"),
+        ("power", "atlas-ui", "atlas-core"),
+        ("config", "atlas-google", "atlas-ui"),
+        ("config", "atlas-panels", "atlas-core"),
     ],
 )
 def test_submission_per_kind_actor_constraints(kind: str, wrong: str, right: str) -> None:
     assert validate_submission({"kind": kind}, wrong) != []
     assert validate_submission({"kind": kind}, right) == []
+
+
+# --- actor pinning (rev 1.2.0, proposal 2026-11-22-audit-actor-pinning) ------------------------------
+
+
+def _record(kind: str, actor: str, sub: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A schema-valid record of ``kind`` apart from the actor pin, built on the golden power record."""
+    rec = {k: v for k, v in golden_chain()[7].items() if k != "power"}
+    rec.update(kind=kind, actor=actor, result={"status": "ok"})
+    if kind == "power":
+        rec["power"] = sub or {"event": "wake_ready"}
+    elif kind == "config":
+        rec["config"] = {"key": "privacy.timeout", "new_sha256": "a" * 64}
+    elif kind in ("auth", "system"):
+        rec[kind] = sub or {"event": "service_start"}
+    return rec
+
+
+def _auth_and_system_cases() -> list[tuple[str, dict[str, Any]]]:
+    defs = SCHEMA["$defs"]
+    cases: list[tuple[str, dict[str, Any]]] = []
+    for kind in ("auth", "system"):
+        for event in defs[kind.capitalize()]["properties"]["event"]["enum"]:
+            cases.append((kind, {"event": event}))
+    every_credential = sorted(set().union(*SERVICE_CREDENTIALS.values()))
+    cases += [("auth", {"event": "credential_rotated", "subject": c}) for c in every_credential]
+    return cases
+
+
+def test_validator_and_schema_agree_on_every_actor_for_every_pinned_kind_and_event() -> None:
+    disagreements = []
+    for actor in sorted(ACTORS):
+        recs = [_record(kind, actor) for kind in ("power", "config")]
+        recs += [_record(kind, actor, sub) for kind, sub in _auth_and_system_cases()]
+        for rec in recs:
+            if (validate_record(rec) == []) != schema_ok(rec):
+                disagreements.append((actor, rec["kind"], rec.get(rec["kind"])))
+    assert not disagreements, disagreements[:5]
+
+
+@pytest.mark.parametrize(
+    ("kind", "event", "right", "wrong"),
+    [
+        ("auth", "device_paired", "atlas-ui", "atlas-discord"),
+        ("auth", "stepup_verified", "atlas-ui", "atlas-core"),
+        ("auth", "stepup_failed", "atlas-ui", "atlas-research"),
+        ("auth", "portfolio_unlocked", "atlas-market", "atlas-ui"),
+        ("auth", "oauth_renewed", "atlas-google", "atlas-discord"),
+        ("auth", "oauth_expired", "atlas-executor", "atlas-core"),
+        ("system", "killswitch", "atlas-core", "atlas-discord"),
+        ("system", "task_killed", "atlas-core", "atlas-research"),
+        ("system", "chain_verified", "atlas-audit", "atlas-google"),
+        ("system", "chain_broken", "atlas-audit", "atlas-core"),
+        ("system", "retention_run", "atlas-audit", "atlas-panels"),
+    ],
+)
+def test_event_pins(kind: str, event: str, right: str, wrong: str) -> None:
+    assert validate_record(_record(kind, right, {"event": event})) == []
+    assert schema_ok(_record(kind, right, {"event": event}))
+    assert validate_record(_record(kind, wrong, {"event": event})) != []
+    assert not schema_ok(_record(kind, wrong, {"event": event}))
+    body = {"kind": kind, "context": "system", kind: {"event": event}}
+    assert validate_submission(body, right) == []
+    assert any("may only be written by" in e for e in validate_submission(body, wrong))
+
+
+@pytest.mark.parametrize("event", ["service_start", "service_stop", "error_forwarded"])
+def test_self_describing_system_events_stay_open_to_every_service(event: str) -> None:
+    for actor in ACTORS:
+        assert validate_record(_record("system", actor, {"event": event})) == [], actor
+
+
+def test_credential_rotated_only_for_the_writers_own_credentials() -> None:
+    def rotated(actor: str, **auth: Any) -> dict[str, Any]:
+        return _record("auth", actor, {"event": "credential_rotated", **auth})
+
+    assert validate_record(rotated("atlas-discord", subject="discord-reader-bot-token")) == []
+    assert validate_record(rotated("atlas-executor", subject="google-oauth-client")) == []  # shared name, own copy
+    assert validate_record(rotated("atlas-google", subject="google-oauth-client")) == []
+    for bad in (
+        rotated("atlas-discord", subject="discord-poster-bot-token"),  # the executor's
+        rotated("atlas-panels", subject="twelvedata-api-key"),  # a service with no credentials
+        rotated("atlas-ui", subject="audit-checkpoint-key"),
+        rotated("atlas-ui"),  # no subject
+    ):
+        assert validate_record(bad) != [], bad
+        assert not schema_ok(bad), bad
+
+
+def test_pin_checks_never_raise_on_garbage() -> None:
+    for junk in ([1], {"a": 1}, None, 5, True):
+        for kind in ("auth", "system"):
+            assert isinstance(actor_errors(kind, {"kind": kind, kind: {"event": junk}}, junk), list)
+        rec = {"kind": "auth", "auth": {"event": "credential_rotated", "subject": junk}}
+        assert actor_errors("auth", rec, "atlas-ui") != []
+        assert actor_errors("auth", rec, junk) != []
+        assert validate_submission({"kind": "auth", "auth": junk}, "atlas-ui") == []
+
+
+def test_pin_tables_match_the_schema() -> None:
+    pinned_kinds = {}
+    event_pins: dict[str, dict[str, frozenset[str]]] = {"auth": {}, "system": {}}
+    credential_lists: dict[str, frozenset[str]] = {}
+    for branch in SCHEMA["allOf"]:
+        cond = branch["if"]["properties"]
+        kind = cond["kind"]["const"]
+        then = branch["then"]
+        actor = then.get("properties", {}).get("actor")
+        if kind in event_pins and kind in cond:
+            event = cond[kind]["properties"]["event"]
+            if "anyOf" in then:  # credential_rotated
+                for alt in then["anyOf"]:
+                    props = alt["properties"]
+                    credential_lists[props["actor"]["const"]] = frozenset(
+                        props["auth"]["properties"]["subject"]["enum"]
+                    )
+                continue
+            allowed = frozenset(actor["enum"] if "enum" in actor else [actor["const"]])
+            for name in event["enum"]:
+                event_pins[kind][name] = allowed
+        elif actor is not None:
+            pinned_kinds[kind] = frozenset(actor["enum"] if "enum" in actor else [actor["const"]])
+    assert pinned_kinds == KIND_ACTORS
+    assert event_pins == EVENT_ACTORS
+    assert credential_lists == SERVICE_CREDENTIALS
+
+
+def test_service_credentials_match_services_md() -> None:
+    from tests.test_deploy_structure import md_credentials
+
+    declared = {service: frozenset(names) for service, names in md_credentials().items() if names}
+    assert declared == SERVICE_CREDENTIALS
