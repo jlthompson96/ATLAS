@@ -21,6 +21,12 @@ BASE_OS = DEPLOY / "provisioning" / "base-os.sh"
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample atlas-pi-admin\n"
 STOCK_CONFIG = "dtparam=audio=on\ncamera_auto_detect=1\n\n[cm5]\ndtoverlay=dwc2,dr_mode=host\n"
 CMDLINE = "console=serial0,115200 console=tty1 root=PARTUUID=00000000-02 rootfstype=ext4 fsck.repair=yes rootwait\n"
+FAKE_HASH = "$y$j9T$ExampleSaltExample$ExampleHashExampleHashExampleHashExample0"  # not a real hash
+USER_DATA = (
+    "#cloud-config\nhostname: atlas-pi\nuser:\n  name: admin\n  lock_passwd: false\n"
+    f"  passwd: {FAKE_HASH}\n  ssh_authorized_keys:\n    - {KEY.strip()}\nssh_pwauth: false\n"
+)
+BOOT_FSTAB = "PARTUUID=00000000-01  {boot}  vfat    defaults          0       2"
 TMP = "/tmp"  # noqa: S108  # the mount point in the fake mount table, not a temporary file
 GOOD_MOUNTS = {
     "/": "ext4 /dev/mmcblk0p2 rw,noatime",
@@ -57,6 +63,7 @@ class Pi:
     ntp_synced: str = "yes"
     throttled: str = "throttled=0x0"
     mem_kb: int = 8_245_000
+    nobody_reads_boot: bool = False
 
     @property
     def etc(self) -> Path:
@@ -79,7 +86,21 @@ def make_pi(tmp_path: Path) -> Pi:
         (tmp_path / d).mkdir(parents=True)
     (pi.boot / "config.txt").write_text(STOCK_CONFIG)
     (pi.boot / "cmdline.txt").write_text(CMDLINE)
-    (pi.etc / "fstab").write_text("proc /proc proc defaults 0 0\n")
+    pi.mounts[str(pi.boot)] = "vfat /dev/mmcblk0p1 rw,relatime,fmask=0022,dmask=0022,codepage=437,errors=remount-ro"
+    (pi.etc / "fstab").write_text("proc /proc proc defaults 0 0\n" + BOOT_FSTAB.format(boot=pi.boot) + "\n")
+    # Known issue P3: the Imager seed, cloud-init's copies of it, and a Mac's Spotlight index of the boot partition.
+    (pi.boot / "user-data").write_text(USER_DATA)
+    (pi.boot / ".Spotlight-V100/Store-V2").mkdir(parents=True)
+    (pi.boot / ".Spotlight-V100/Store-V2/0.indexArrays").write_text(f"index {FAKE_HASH}")
+    (pi.boot / "._config.txt").write_text("AppleDouble")
+    instance = tmp_path / "var/lib/cloud/instances/rpi-imager-1"
+    instance.mkdir(parents=True)
+    for name in ("user-data.txt", "user-data.txt.i", "cloud-config.txt"):
+        (instance / name).write_text(USER_DATA)
+    (instance / "obj.pkl").write_text(f"pickle\x00{FAKE_HASH}\x00")  # binary: NUL bytes
+    (instance / "boot-finished").write_text("done\n")
+    (tmp_path / "var/log").mkdir(parents=True)
+    (tmp_path / "var/log/cloud-init.log").write_text(f"start\nconfig: passwd: {FAKE_HASH}\nfinished\n")
     (pi.etc / "os-release").write_text('PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nVERSION_CODENAME=trixie\n')
     (tmp_path / "home/admin/.ssh/authorized_keys").write_text(KEY)
     (tmp_path / "proc/device-tree/model").write_bytes(b"Raspberry Pi 5 Model B Rev 1.1\x00")
@@ -101,6 +122,7 @@ def run(pi: Pi, snippet: str) -> subprocess.CompletedProcess[str]:
 source "{BASE_OS}"
 ATLAS_ADMIN_USER=admin; unset SUDO_USER
 ETC="{pi.etc}"; BOOT="{pi.boot}"; DATA=/var/lib/atlas; SWAPFILE="{r}/var-swap"; PROC="{r}/proc"; SYS="{r}/sys"
+CLOUD_LIB="{r}/var/lib/cloud"; LOGDIR="{r}/var/log"
 FSROOT="{r}"
 id() {{ if [ "$1" = -u ]; then echo 0; else command id "$@"; fi; }}
 getent() {{ [ "$1" = passwd ] && [ "$2" = admin ] && echo "admin:x:1000:1000::{r}/home/admin:/bin/bash"; }}
@@ -133,6 +155,7 @@ systemctl() {{
   echo "systemctl $*" >>"{calls}"; return 0
 }}
 timedatectl() {{ echo "{pi.ntp_synced}"; }}
+runuser() {{ return {0 if pi.nobody_reads_boot else 1}; }}
 visudo() {{ echo "visudo $1" >>"{calls}"; return {pi.visudo_rc}; }}
 sudo() {{
   case "$1" in
@@ -170,6 +193,7 @@ def applied(tmp_path: Path) -> Pi:
     assert result.returncode == 0, result.stderr
     pi.fstab_mounts["/var/log/journal"] = "/var/lib/atlas/logs/journal"
     pi.mounts["/var/log/journal"] = "ext4 /dev/mmcblk0p3[/logs/journal] rw,noatime,errors=remount-ro,commit=60"
+    pi.mounts[str(pi.boot)] = "vfat /dev/mmcblk0p1 rw,relatime,fmask=0077,dmask=0077,codepage=437,errors=remount-ro"
     return pi
 
 
@@ -375,6 +399,57 @@ def test_line_under_a_model_filter_gets_an_all_copy(tmp_path: Path) -> None:
 # --- check ----------------------------------------------------------------------------------------------------------
 
 
+def test_apply_closes_p3(tmp_path: Path) -> None:
+    """Known issue P3: the boot partition becomes root-only and no copy of the password hash is left."""
+    pi = make_pi(tmp_path)
+    result = run(pi, "cmd_apply")
+    assert result.returncode == 0, result.stderr
+    fstab = (pi.etc / "fstab").read_text().splitlines()
+    assert fstab[0] == "proc /proc proc defaults 0 0"  # other lines untouched
+    assert f"PARTUUID=00000000-01  {pi.boot}  vfat  defaults,fmask=0077,dmask=0077  0  2" in fstab
+    assert JOURNAL_FSTAB in fstab
+    assert (pi.etc / "cloud/cloud-init.disabled").is_file()
+
+    want = USER_DATA.replace(f"  passwd: {FAKE_HASH}\n", "")
+    assert (pi.boot / "user-data").read_text() == want  # only the hash line goes; the key and the rest stay
+    instance = tmp_path / "var/lib/cloud/instances/rpi-imager-1"
+    for name in ("user-data.txt", "user-data.txt.i", "cloud-config.txt"):
+        assert (instance / name).read_text() == want
+    assert not (instance / "obj.pkl").exists()  # binary state: removed, not edited
+    assert (instance / "boot-finished").read_text() == "done\n"
+    assert (tmp_path / "var/log/cloud-init.log").read_text() == "start\nfinished\n"
+    assert not (pi.boot / ".Spotlight-V100").exists()
+    assert not (pi.boot / "._config.txt").exists()
+    assert (pi.boot / "config.txt").exists()
+    assert FAKE_HASH not in "".join(tree(pi).values())
+
+
+@pytest.mark.parametrize(
+    ("options", "want"),
+    [
+        ("defaults", "defaults,fmask=0077,dmask=0077"),
+        ("defaults,umask=0022", "defaults,fmask=0077,dmask=0077"),
+        ("defaults,fmask=0022,noatime,dmask=0022", "defaults,noatime,fmask=0077,dmask=0077"),
+        ("fmask=0077,dmask=0022", "fmask=0077,dmask=0077"),
+    ],
+)
+def test_boot_fstab_options_are_replaced_not_duplicated(tmp_path: Path, options: str, want: str) -> None:
+    pi = make_pi(tmp_path)
+    (pi.etc / "fstab").write_text(f"PARTUUID=00000000-01  {pi.boot}  vfat  {options}  0  2\n")
+    result = run(pi, "cmd_apply")
+    assert result.returncode == 0, result.stderr
+    assert f"PARTUUID=00000000-01  {pi.boot}  vfat  {want}  0  2" in (pi.etc / "fstab").read_text().splitlines()
+
+
+def test_apply_without_a_boot_fstab_line_warns_and_goes_on(tmp_path: Path) -> None:
+    pi = make_pi(tmp_path)
+    (pi.etc / "fstab").write_text("proc /proc proc defaults 0 0\n")
+    result = run(pi, "cmd_apply")
+    assert result.returncode == 0, result.stderr
+    assert "no line for" in result.stderr
+    assert FAKE_HASH not in (pi.boot / "user-data").read_text()
+
+
 def fails(result: subprocess.CompletedProcess[str]) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.startswith("FAIL")]
 
@@ -426,6 +501,18 @@ def test_check_passes_on_a_set_up_pi(tmp_path: Path) -> None:
         (lambda pi: pi.mounts.update({"/var/log/journal": "ext4 /dev/mmcblk0p2[/var/log/journal] rw"}), "journal mount"),
         (lambda pi: (pi.boot / "cmdline.txt").write_text("overlayroot=tmpfs " + CMDLINE), "overlayroot=tmpfs'"),
         (lambda pi: (pi.etc / "os-release").write_text("VERSION_CODENAME=bookworm\n"), "trixie"),
+        (lambda pi: (pi.etc / "fstab").write_text(BOOT_FSTAB.format(boot=pi.boot) + "\n"), "fstab options 'defaults'"),
+        (lambda pi: (pi.etc / "fstab").write_text("proc /proc proc defaults 0 0\n"), "no fstab line"),
+        (lambda pi: pi.mounts.update({str(pi.boot): "vfat /dev/mmcblk0p1 rw,fmask=0022,dmask=0022"}), "mounted with"),
+        (lambda pi: pi.mounts.update({str(pi.boot): "vfat /dev/mmcblk0p1 rw,fmask=0077,dmask=0077,umask=0022"}), "mounted with"),
+        (lambda pi: setattr(pi, "nobody_reads_boot", True), "readable by nobody"),
+        (lambda pi: (pi.etc / "cloud/cloud-init.disabled").unlink(), "cloud-init"),
+        (lambda pi: (pi.boot / "user-data").write_text(USER_DATA), "user-data"),
+        (lambda pi: (pi.boot / "notes.txt").write_text(f"x {FAKE_HASH.replace('$y$', '$6$')}\n"), "notes.txt"),
+        (lambda pi: (pi.root / "var/lib/cloud/instances/rpi-imager-1/obj.pkl").write_text(f"p\x00{FAKE_HASH}"), "obj.pkl"),
+        (lambda pi: (pi.root / "var/log/cloud-init.log").write_text(f"passwd: {FAKE_HASH}\n"), "cloud-init.log"),
+        (lambda pi: (pi.boot / ".fseventsd").mkdir(), "macOS metadata"),
+        (lambda pi: (pi.boot / "overlays").mkdir() or (pi.boot / "overlays/._x.dtbo").write_text("AppleDouble"), "._x.dtbo"),
     ],
 )  # fmt: skip
 def test_check_fails_each_wrong_setting(tmp_path: Path, change: Callable[[Pi], object], expected: str) -> None:

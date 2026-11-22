@@ -19,6 +19,8 @@ BOOT=/boot/firmware
 DATA=/var/lib/atlas
 SWAPFILE=/var/swap
 JOURNAL=/var/log/journal
+CLOUD_LIB=/var/lib/cloud
+LOGDIR=/var/log
 FSROOT=""   # prefix for directories apply creates; the tests point it at a throwaway tree
 PROC=/proc
 SYS=/sys
@@ -142,7 +144,106 @@ remount_content() {
     "[Unit]" "ConditionPathIsMountPoint=!/media/root-ro"
 }
 
+# Known issue P3: Raspberry Pi Imager puts the admin's password hash (the one sudo checks) in the cloud-init seed on
+# the FAT boot partition, which Pi OS mounts with fmask=0022, so every local user, sandboxed services included, could
+# read it. Cloud-init copies it into its state and its log. A crypt(3) hash: yescrypt, sha512/256, bcrypt, md5.
+# shellcheck disable=SC2016  # a regex: the $ are literal and must not expand
+HASH_RE='\$(y|gy|7|6|5|2[aby]?|1)\$[./A-Za-z0-9]{2,}'
+CLOUD_DISABLED=cloud/cloud-init.disabled
+MAC_METADATA=".Spotlight-V100 .fseventsd .Trashes .TemporaryItems"
+
+# boot_fstab_options: the options of the fstab line that mounts $BOOT (empty if there is none).
+boot_fstab_options() {
+  awk -v t="$BOOT" '!/^[[:space:]]*#/ && $2 == t { print $4; exit }' "$ETC/fstab"
+}
+
+# boot_options_ok OPTIONS: true if OPTIONS make every file on the FAT partition root-only.
+boot_options_ok() {
+  has_option "$1" fmask=0077 && has_option "$1" dmask=0077 && ! printf '%s\n' "$1" | tr ',' '\n' | grep -q '^umask='
+}
+
+# boot_fstab_content: $ETC/fstab with fmask/dmask/umask on the $BOOT line replaced by fmask=0077,dmask=0077.
+boot_fstab_content() {
+  awk -v t="$BOOT" '
+    !/^[[:space:]]*#/ && $2 == t {
+      n = split($4, o, ","); opts = ""
+      for (i = 1; i <= n; i++) if (o[i] !~ /^(fmask|dmask|umask)=/) opts = opts (opts == "" ? "" : ",") o[i]
+      $4 = opts (opts == "" ? "" : ",") "fmask=0077,dmask=0077"
+      print $1 "  " $2 "  " $3 "  " $4 "  " ($5 == "" ? 0 : $5) "  " ($6 == "" ? 0 : $6); next
+    }
+    { print }' "$ETC/fstab"
+}
+
+# cloud_init_files: cloud-init's seed on the boot partition, its state and its logs (the places P3 found the hash).
+cloud_init_files() {
+  local f
+  for f in "$BOOT/user-data" "$BOOT/network-config" "$BOOT/meta-data" "$LOGDIR/cloud-init.log" \
+    "$LOGDIR/cloud-init-output.log"; do
+    [ -f "$f" ] && printf '%s\n' "$f"
+  done
+  [ -d "$CLOUD_LIB" ] && find "$CLOUD_LIB" -type f 2>/dev/null
+  return 0
+}
+
+# hash_files: every file that could hold the hash and does. Text files anywhere on the boot partition, so the
+# check also catches a copy apply doesn't know about; every file, binary too, in cloud-init's state.
+hash_files() {
+  {
+    [ -d "$BOOT" ] && grep -rlIE "$HASH_RE" "$BOOT" 2>/dev/null
+    cloud_init_files | while IFS= read -r f; do grep -qaE "$HASH_RE" "$f" 2>/dev/null && printf '%s\n' "$f"; done
+  } | sort -u
+  return 0
+}
+
+mac_metadata() {
+  local m
+  for m in $MAC_METADATA; do
+    [ -e "$BOOT/$m" ] && printf '%s\n' "$BOOT/$m"
+  done
+  [ -d "$BOOT" ] && find "$BOOT" -name '._*' -type f 2>/dev/null
+  return 0
+}
+
 # --- apply ----------------------------------------------------------------------------------------------------------
+
+# apply_boot_secrets: known issue P3.
+apply_boot_secrets() {
+  local opts f
+  log "== boot partition root-only, cloud-init off, no copies of the password hash (known issue P3)"
+  opts="$(boot_fstab_options)"
+  if [ -z "$opts" ]; then
+    log "WARNING: $ETC/fstab has no line for $BOOT; add one with fmask=0077,dmask=0077 by hand"
+  elif boot_options_ok "$opts"; then
+    log "ok      $ETC/fstab mounts $BOOT root-only"
+  else
+    write_reboot "$ETC/fstab" 644 "$(boot_fstab_content)"
+  fi
+  # Cloud-init only needs the seed at first boot. Disabled, it can't re-apply it, and the copies can go.
+  write_file "$ETC/$CLOUD_DISABLED" 644 \
+    "# ATLAS: cloud-init ran at first boot and is not needed again (known issue P3). Managed by base-os.sh."
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -qaE "$HASH_RE" "$f" 2>/dev/null || continue
+    if grep -qI . "$f" 2>/dev/null; then
+      log "scrub   $f (lines with a password hash removed)"
+      if [ "$DRY_RUN" != "1" ]; then
+        # In place, so the owner and mode stay as they are.
+        grep -vE "$HASH_RE" "$f" >"$f.atlas-tmp" || true
+        cat "$f.atlas-tmp" >"$f"
+        rm -f "$f.atlas-tmp"
+      fi
+    else
+      log "remove  $f (binary cloud-init state holding a password hash)"
+      run rm -f "$f"
+    fi
+  done < <(cloud_init_files)
+  # macOS writes these when the card is mounted on a Mac; the Spotlight index had indexed user-data, hash included.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    log "remove  $f (macOS metadata)"
+    run rm -rf "$f"
+  done < <(mac_metadata)
+}
 
 # ensure_dir_once PATH MODE OWNER:GROUP: create PATH only if it is missing (no needless card writes).
 ensure_dir_once() {
@@ -317,6 +418,7 @@ cmd_apply() {
   apply_sudo
   log "== remount-fs: skipped while the overlay is on"
   write_reboot "$ETC/$REMOUNT_DROPIN" 644 "$(remount_content)"
+  apply_boot_secrets
   apply_sshd "$user"
   if [ "$REBOOT" = "1" ]; then
     log "done. Reboot (sudo reboot), then run: sudo $0 check"
@@ -501,6 +603,47 @@ check_boot() {
   expect "clock synchronized" "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" yes
 }
 
+# Known issue P3: nothing on the boot partition, and no copy of the admin's password hash, readable by other users.
+check_boot_secrets() {
+  local opts live found
+  opts="$(boot_fstab_options)"
+  if [ -z "$opts" ]; then
+    fail "boot partition: no fstab line for $BOOT"
+  elif boot_options_ok "$opts"; then
+    pass "boot partition: root-only in fstab"
+  else
+    fail "boot partition: fstab options '$opts', want fmask=0077,dmask=0077 (run apply with the overlay off)"
+  fi
+  live="$(findmnt -no OPTIONS "$BOOT" 2>/dev/null || true)"
+  if boot_options_ok "$live"; then
+    pass "boot partition: mounted root-only"
+  else
+    fail "boot partition: mounted with '$live', want fmask=0077,dmask=0077 (reboot after apply)"
+  fi
+  if runuser -u nobody -- test -r "$BOOT/config.txt" 2>/dev/null; then
+    fail "boot partition: readable by nobody"
+  else
+    pass "boot partition: not readable by other users"
+  fi
+  if [ -e "$ETC/$CLOUD_DISABLED" ]; then
+    pass "cloud-init: disabled"
+  else
+    fail "cloud-init: $ETC/$CLOUD_DISABLED missing (run apply with the overlay off)"
+  fi
+  found="$(hash_files)"
+  if [ -z "$found" ]; then
+    pass "no copy of a password hash on the boot partition or in cloud-init's files"
+  else
+    fail "password hash found in: $(printf '%s' "$found" | tr '\n' ' ')(run apply with the overlay off)"
+  fi
+  found="$(mac_metadata)"
+  if [ -z "$found" ]; then
+    pass "no macOS metadata on the boot partition"
+  else
+    fail "macOS metadata on the boot partition: $(printf '%s' "$found" | tr '\n' ' ')"
+  fi
+}
+
 check_overlay() {
   local cmdline token found=""
   cmdline="$(cat "$BOOT/cmdline.txt" 2>/dev/null || true)"
@@ -533,6 +676,7 @@ cmd_check() {
   check_sshd "$user"
   check_sudo "$user"
   check_boot
+  check_boot_secrets
   check_overlay
   if [ "$FAILS" -eq 0 ]; then
     printf 'all checks passed\n'

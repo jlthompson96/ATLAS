@@ -435,11 +435,15 @@ This deviates from the brief's "encrypt data at rest" requirement. **What someon
 | Email, Discord, calendar content | **No: not stored.** Panels keep metadata in RAM only and re-fetch after a reboot. | Data minimisation |
 | Memory DB, transcripts | Yes | Retention cut to 30 days (memory) and 7 days (transcripts) (§2.12) |
 | Audit log | Yes: resource IDs and hashes, not content | D7 changed to hashes only |
+| Admin password hash (`/etc/shadow`) | Yes, and it can be cracked offline. It is the password `sudo` asks for. | A password used nowhere else. Changed after a theft (theft runbook). (Added 2026-11-22 from PT-11, known issue P4.) |
+| Cloud-init seed (`/boot/firmware/user-data`) and its copies in `/var/lib/cloud` and cloud-init's logs | Imager wrote the admin password hash into them; on the FAT partition it was also readable by **every local user**, sandboxed services included (known issue P3) | `base-os.sh` mounts the boot partition root-only, disables cloud-init after first boot and removes the hash lines; `check` verifies it. |
+| SSH host keys (`/etc/ssh/ssh_host_*`) | Yes: a copy can impersonate the Pi to the Mac and collect the `sudo` password | After a theft: new host key on the new image, old key removed from the Mac's `known_hosts`, new fingerprint checked at the console (theft runbook). |
+| Admin's `.bash_history` | Yes: every command typed | Secrets never go on a command line (`store-credential.sh` reads stdin). After a theft, rotate anything that ever appeared there. |
 
 Other compensating controls:
 
 - Keep the Pi out of sight, in an enclosure that covers the card slot.
-- Theft runbook, target within 1 h of noticing: revoke the Google grants, reset the Discord bot token, rotate the WireGuard and LM Studio keys.
+- Theft runbook ([docs/runbooks/theft.md](runbooks/theft.md)), target within 1 h of noticing: revoke the Google grants, reset the Discord bot token, rotate the WireGuard and LM Studio keys. It also covers the audit check against the off-box anchors, re-keying SSH, and the admin password.
 - **Backups must be encrypted**, because they copy the unencrypted secrets (see below).
 
 **Middle ground considered and declined (D17, rev 2.1):** LUKS on the data partition only, with a keyfile on a USB stick left plugged in. Reboots stay automatic, and a lost or copied card on its own is unreadable. It does not help if the whole Pi is taken with the stick still attached. A TPM module would bind the key to the board, but I found no verified Pi 5 setup source (Low).
