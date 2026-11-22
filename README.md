@@ -229,7 +229,8 @@ rest; the Pi's data partition is not encrypted, so reboots stay unattended (deci
 and D17). Anyone who copies the microSD card can read the stored tokens and the memory
 database. The compensating controls are listed in PLAN.md §2.7 and threat T10: no mail,
 Discord or calendar bodies at rest, an audit log of IDs and hashes only, Google tokens
-that expire within 7 days, and a rehearsed theft runbook.
+that expire within 7 days, and a [theft runbook](docs/runbooks/theft.md) (written, not yet
+rehearsed).
 
 ## Roadmap
 
