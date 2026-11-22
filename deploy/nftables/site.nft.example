@@ -2,13 +2,12 @@
 # Every address below is a documentation placeholder (RFC 5737). Replace them with your LAN's real values on the Pi.
 # Never commit the edited file.
 
-define LAN_CIDR = 192.0.2.0/24          # the home LAN
+define LAN_CIDR = 192.0.2.0/24          # the home LAN: may reach SSH (:22), the HUD (:443) and ping
 define LAN_BROADCAST = 192.0.2.255      # subnet broadcast (Wake-on-LAN)
 define LAN_DNS = 192.0.2.1              # LAN resolver (router or Pi-side resolver); PLAN 5.7
 define NTP_SERVERS = { 216.239.35.0, 216.239.35.4, 216.239.35.8, 216.239.35.12 }   # time.google.com's fixed addresses
 #   (PLAN 5.7). Plain IPv4 only: timesyncd uses this list too. A LAN time server instead: { 192.0.2.1 }. Don't mix
 #   Google's servers with others: Google smears leap seconds, most others step.
-define ADMIN_IP = 192.0.2.10            # the development Mac: the only device allowed to SSH in
 define DESKTOP_LAN_IP = 192.0.2.20      # the LLM desktop's LAN address (WireGuard endpoint, UDP 51820)
 define DESKTOP_WG_IP = 10.77.0.2        # the desktop inside the tunnel (contracts/services.md section 2)
 define LAN_PREFIX6 = 2001:db8:1234:5600::/64   # the LAN's global IPv6 prefix (RFC 3849 placeholder): never an internet destination

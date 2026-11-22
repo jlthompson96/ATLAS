@@ -1,6 +1,6 @@
 # ATLAS services, v1
 
-**Schema revision:** 1.2.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
+**Schema revision:** 1.3.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
 
 This file is the single source for service names, Unix users, listeners, secrets and egress allowlists. nftables rules, systemd units, the egress proxy config and the audit `actor` enum are all generated from or checked against it.
 
@@ -49,7 +49,7 @@ Each Pi service runs as its own system user, named the same as the service (`atl
 | LM Studio API | `10.77.0.2:1234` | `atlas-core`, from `10.77.0.1` only | API token required (§2.8). |
 | `atlas-hostd` | `10.77.0.2:8770` | `atlas-core`, from `10.77.0.1` only | See `hostd.v1.yaml`. |
 | `atlas-hostd` helper | desktop `127.0.0.1:8771` | `atlas-hostd-helper` | Loopback only. |
-| SSH | Pi `:22` | admin device only (the development Mac, §7.0) | Key-only; the key has a passphrase. Deploys use this path. |
+| SSH | Pi `:22` | the home LAN (`LAN_CIDR`); only the admin's key can log in (the development Mac, §7.0) | Key-only; the key has a passphrase. Deploys use this path. |
 | Mock event server (dev only) | `127.0.0.1:8765` | HUD dev server | Never deployed. |
 
 **CONNECT proxy ports** (all on `127.0.0.1`, owned by `atlas-egress`):
