@@ -20,14 +20,18 @@ Root on the Pi has no internet path (provisioning.md, "Maintenance"). Download t
 
 ```sh
 # Mac
-limactl shell atlas -- bash -c 'cd /tmp && apt-get download restic && sha256sum restic_*_arm64.deb'
+limactl shell atlas -- bash -c 'cd /tmp && apt-get download restic=0.18.0-1+b4 && sha256sum restic_*_arm64.deb'
 limactl copy atlas:/tmp/restic_0.18.0-1+b4_arm64.deb .
 scp restic_0.18.0-1+b4_arm64.deb atlas-pi:/tmp/
-# Pi: the two hashes must be identical
-apt-cache show restic | grep '^SHA256:'
+# Pi: the two hashes must be identical. Name the version: with backports enabled, apt-cache lists more than one.
+apt-cache show restic=0.18.0-1+b4 | grep '^SHA256:'
 sha256sum /tmp/restic_0.18.0-1+b4_arm64.deb
-sudo apt install /tmp/restic_0.18.0-1+b4_arm64.deb
+# Offline: --no-install-recommends, or apt tries to download the recommended packages and fails (no internet for root).
+# The file stays in /tmp: apt reads local packages as its unprivileged _apt user, which can't read a home directory.
+sudo apt-get install --no-install-recommends /tmp/restic_0.18.0-1+b4_arm64.deb
 ```
+
+The window rehearsal in the ARM64 VM (2026-11-23) found both: a plain `apt install` failed offline on restic's recommended documentation packages, and a package under `/root` was unreadable to `_apt`.
 
 Checked on 2026-11-23: `3877c6ef8efe052e80a6417b0ac0a672e644fd8bf5ef14e8b803ab6744e43be2` for `0.18.0-1+b4`. The Pi's lists are only as fresh as its last `apt update`, so a newer package in the VM won't match. Use the version the Pi lists (`apt-get download restic=<version>`).
 
