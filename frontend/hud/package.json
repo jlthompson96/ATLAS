@@ -14,7 +14,8 @@
     "gen:types": "node scripts/gen-types.mjs",
     "lint": "eslint . && node scripts/gen-types.mjs --check",
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
-    "test": "vitest run"
+    "test": "vitest run",
+    "acceptance": "bash scripts/phase2-acceptance.sh"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

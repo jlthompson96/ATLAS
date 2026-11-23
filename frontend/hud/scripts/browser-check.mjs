@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 // Real-browser checks that jsdom can't do: CSP violations (UI-SEC-4), network requests (UI-SEC-3),
 // WebGL2 availability, console errors, and an axe-core scan WITH colour contrast (A11Y-1).
+// --all-states samples the orb during the wait and fails unless every events.v1 state was rendered
+// (with the mock's `--scenario all --loop`); --reduced-motion emulates prefers-reduced-motion and fails
+// if the full animated tier ever runs (A11Y-2); --expect-profile checks the device profile (kiosk/remote).
+// scripts/phase2-acceptance.sh runs all of this in one go.
 //
 // Needs a local Chrome/Chromium (CHROME_BIN, or the macOS default path) and a running HUD:
 //
@@ -24,7 +28,7 @@ const args = process.argv.slice(2);
 const url = args.find((a) => /^https?:/.test(a));
 const opt = (name, d) => (args.includes(`--${name}`) ? args[args.indexOf(`--${name}`) + 1] : d);
 if (!url) {
-  console.error('usage: node scripts/browser-check.mjs <url> [--width N] [--height N] [--wait ms] [--axe] [--shot prefix] [--eval js]');
+  console.error('usage: node scripts/browser-check.mjs <url> [--width N] [--height N] [--wait ms] [--axe] [--shot prefix] [--eval js] [--all-states] [--reduced-motion] [--expect-profile P]');
   process.exit(2);
 }
 const width = Number(opt('width', 1600));
@@ -35,6 +39,12 @@ const doAxe = args.includes('--axe');
 const insecure = args.includes('--insecure'); // dev CA: ignore certificate errors (never for anything real)
 const cookie = opt('cookie');
 const evalExpr = opt('eval');
+const allStates = args.includes('--all-states');
+const reducedMotion = args.includes('--reduced-motion');
+const expectProfile = opt('expect-profile');
+// The orb states come from the contract, so a new state can't be forgotten here.
+const contract = JSON.parse(readFileSync(new URL('../../../contracts/events.v1.schema.json', import.meta.url), 'utf8'));
+const contractStates = contract.$defs.State.enum;
 const chromeBin = process.env.CHROME_BIN ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 const profile = mkdtempSync(join(tmpdir(), 'hud-check-'));
@@ -92,18 +102,39 @@ try {
 
   for (const d of ['Page', 'Runtime', 'Log', 'Network']) await send(`${d}.enable`);
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  if (reducedMotion) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   if (cookie) {
     const i = cookie.indexOf('=');
     await send('Network.setCookie', { name: cookie.slice(0, i), value: cookie.slice(i + 1), url: origin + '/', secure: true, httpOnly: true, sameSite: 'Strict' });
   }
-  await send('Page.navigate', { url });
-  await sleep(wait);
-
   const evalJs = async (expression) => {
     const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? 'evaluate failed');
     return r.result?.value;
   };
+
+  await send('Page.navigate', { url });
+  // Sample the orb while the scenario plays: which states were rendered, and which animation tier ran.
+  const statesSeen = new Set();
+  const tiersSeen = new Set();
+  let canvasUnderReducedMotion = false;
+  for (const end = Date.now() + wait; Date.now() < end; ) {
+    await sleep(200);
+    try {
+      const s = JSON.parse(await evalJs(`JSON.stringify({ state: document.querySelector('.orb')?.dataset.state ?? null, tier: document.querySelector('.orb')?.dataset.tier ?? null, canvas: !!document.querySelector('.orb canvas') })`));
+      if (s.state) statesSeen.add(s.state);
+      if (s.tier) tiersSeen.add(s.tier);
+      if (reducedMotion && s.canvas) canvasUnderReducedMotion = true;
+    } catch {
+      /* page still loading */
+    }
+  }
+  console.log(`states seen: ${[...statesSeen].join(', ')}; tiers: ${[...tiersSeen].join(', ')}`);
+  if (allStates) {
+    const missing = contractStates.filter((s) => !statesSeen.has(s));
+    if (missing.length) failures.push(`states never rendered: ${missing.join(', ')} (lengthen --wait or raise the mock's --speed)`);
+  }
+  if (reducedMotion && (tiersSeen.has('full') || canvasUnderReducedMotion)) failures.push('reduced motion: the full animated tier or its canvas still ran');
 
   const probe = JSON.parse(
     await evalJs(`JSON.stringify({
@@ -121,6 +152,7 @@ try {
   console.log('page:', JSON.stringify(probe));
   if (probe.connection !== 'open') failures.push(`websocket not open (connection=${probe.connection})`);
   if (probe.overflowX) failures.push('horizontal overflow at this viewport');
+  if (expectProfile && probe.profile !== expectProfile) failures.push(`profile is ${probe.profile}, expected ${expectProfile}`);
 
   const offOrigin = [...requests].filter((r) => !r.startsWith(origin) && !r.startsWith(origin.replace(/^http/, 'ws')) && !r.startsWith('about:') && !r.startsWith('data:'));
   console.log('requests:', [...requests].join(', '));
