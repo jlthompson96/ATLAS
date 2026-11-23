@@ -26,7 +26,7 @@ plan, with every decision, benchmark and acceptance test, is
 [docs/PLAN.md](docs/PLAN.md). The interfaces that hold it together are versioned in
 [contracts/](contracts/).
 
-**Status (2026-11-20): the software for a text-only ATLAS runs on the development Mac;
+**Status (2026-11-23): the software for a text-only ATLAS runs on the development Mac;
 the Pi is provisioned and runs the audit log and the egress proxy.**
 
 - **Built:**
@@ -259,6 +259,9 @@ works as one coherent design.
 | Phase 2 server | `atlas-ui`: HTTPS, device pairing, step-up PIN, privacy mode, the core control socket | **Merged**; the kiosk on the Pi is still to do |
 | ARM64 VM | Debian 13 VM on the Mac standing in for the Pi: Python 3.13, provisioning, deploy, PT-1, power cuts | **Running**; results in [pi-verification.md](docs/runbooks/pi-verification.md) |
 | Pi bring-up | From a blank card to provisioning: card layout, then `base-os.sh` for fewer card writes, key-only SSH, a pass/fail check and the hardware inventory | **Done** on the Pi, 2026-11-20: all 11 steps (base setup, provisioning, firewall, first deploy, read-only root). Results in the runbook. | [pi-bringup.md](docs/runbooks/pi-bringup.md) |
+| Backup (Phase 0) | Nightly restic backup to two rotated USB drives, `atlas-backup` with read-only access and no network, restore runbook ([ADR 0002](docs/adr/0002-backup-restic-usb.md)) | **Merged**; tested end to end in the VM, installed on the Pi in the next maintenance window |
+| WireGuard link (Phase 1) | `wg0` under systemd-networkd with an encrypted key, firewall mark (known issue D1), Windows tunnel template and firewall script | **Merged**; Pi side tested in the VM, Windows side untested until the desktop |
+| Pi checks | `pi-verify.sh` (the root-only checklist items) and the plan for the next window ([window-2026-11-24.md](docs/runbooks/window-2026-11-24.md)) | **Merged**; all checks pass in a provisioned VM |
 
 Every phase ends with an ADR and recorded benchmarks.
 
