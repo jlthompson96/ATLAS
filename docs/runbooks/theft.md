@@ -33,6 +33,7 @@ Then check for misuse in the window from step 0: Gmail's Sent folder and Google'
 |---|---|---|
 | Pi's WireGuard private key (root, `systemd-networkd`) | 1 | On the desktop, remove the Pi's `[Peer]` from the WireGuard tunnel (or deactivate the tunnel until the new Pi exists). The desktop then accepts nothing from `10.77.0.1`, which is also what `atlas-hostd` on port 8770 trusts. Rotate the desktop's own WireGuard key too: the copy holds its public key and endpoint, not its private key, so this is optional. |
 | `lmstudio-api-token` (`atlas-core`) | 1 | LM Studio → Developer → API tokens: delete the ATLAS token. Without the tunnel it can only be used from your LAN, but delete it anyway. |
+| ATLAS local CA on your devices (`atlas-ui`'s certificate) | 2 | On every device that trusts "ATLAS local CA": remove it now (Mac: Keychain Access; iPhone: Settings → General → VPN & Device Management; Windows: `certmgr.msc`). The thief has the server key, so a device that still trusts the CA would accept an impostor HUD at the Pi's address and could hand it your PIN. The CA itself keeps no private key, so it can't sign anything new. |
 
 ## Step 3: things that stay dangerous after a re-image
 
@@ -70,10 +71,10 @@ Start from a fresh card ([pi-bringup.md](pi-bringup.md), then [provisioning.md](
 | `audit-checkpoint-key`, `audit-segment-master-key` (`atlas-audit`) | 0 | `gen-audit-keys.sh` (above) |
 | WireGuard key pair | 1 | New key pair on the Pi; put the new public key in the desktop's `[Peer]` |
 | `lmstudio-api-token` (`atlas-core`) | 1 | New token in LM Studio |
-| `approval-signing-key` (`atlas-core`) | 6 | New Ed25519 key; put the new public key in `atlas-executor`'s config. Any approval signed with the old key must be refused. |
-| `tls-key` (`atlas-ui`), ATLAS local CA | 2 | New CA and server key. Remove the old CA from every device that trusted it, then install the new one. |
-| `device-token-key` (`atlas-ui`) | 2 | New key. Every paired device's token becomes invalid; pair each device again. |
-| `stepup-pin-hash` (`atlas-ui`) | 2 | **Choose a new PIN.** The old hash is Argon2id, but a short PIN falls to an offline search quickly. |
+| `approval-signing-key` (`atlas-core`) | 2 | `gen-core-keys.sh`. Put the new public key in `atlas-executor`'s config (Phase 6). Any approval signed with the old key must be refused. |
+| `tls-key` (`atlas-ui`), ATLAS local CA | 2 | `gen-ui-keys.sh` on the new card: a new CA and server key. Install the new `ca.crt` on each device (the old one was removed in step 2). |
+| `device-token-key` (`atlas-ui`) | 2 | New key (`gen-ui-keys.sh` creates it on a fresh card). Every paired device's token becomes invalid; pair each device again (`ui-devices.sh pair remote`). |
+| `stepup-pin-hash` (`atlas-ui`) | 2 | **Choose a new PIN** with `gen-ui-pin.sh` at the console. The old hash is Argon2id, but a short PIN falls to an offline search quickly. |
 | Google grants, `google-oauth-client` | 4, 6 | New consent for the read grant (and later the send grant), using the new client secret from step 1 |
 | Discord bot tokens | 4, 6 | The reset tokens from step 1 |
 | `twelvedata-api-key` | 4 | The regenerated key from step 1 |

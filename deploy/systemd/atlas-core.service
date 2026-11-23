@@ -66,6 +66,12 @@ UMask=0077
 
 # --- secrets: systemd-creds, readable only by this unit (services.md section 4) ---
 LoadCredentialEncrypted=lmstudio-api-token:/var/lib/atlas/credentials/atlas-core/lmstudio-api-token.cred
+# Until the desktop is linked there is no token file: this default (a single newline) stands in, because systemd uses
+# it only when the file above can't be loaded. atlas-core runs with --backend none, which never reads it, and the LM
+# Studio backend strips and refuses an empty token, so a linked core fails closed if the real credential is missing.
+# Not an empty value: a unit file ignores `SetCredential=ID:` as invalid syntax (systemd 257; found in the ARM64 VM),
+# and then the missing file fails the unit at the CREDENTIALS step.
+SetCredential=lmstudio-api-token:\n
 LoadCredentialEncrypted=approval-signing-key:/var/lib/atlas/credentials/atlas-core/approval-signing-key.cred
 
 # --- environment ---

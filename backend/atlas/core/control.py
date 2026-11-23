@@ -35,6 +35,7 @@ import contextlib
 import json
 import logging
 import os
+import socket
 import stat
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -284,15 +285,25 @@ class ControlServer:
 
     # --- lifecycle ---
 
-    async def start(self, path: Path) -> None:
-        _remove_stale_socket(path)
-        old = os.umask(0o117)  # the socket is created 0660: group access is the contract's access control
-        try:
-            self._server = await asyncio.start_unix_server(self._client, path=str(path), limit=MAX_LINE)
-        finally:
-            os.umask(old)
+    async def start(self, path: Path | None = None, *, sock: socket.socket | None = None) -> None:
+        """Listen on ``path`` (created 0660), or on ``sock``: the socket systemd created from atlas-core.socket,
+        which already carries the contract's owner, group and mode."""
+        if (path is None) == (sock is None):
+            raise ValueError("give exactly one of path and sock")
+        if sock is not None:
+            # systemd owns that socket file: never unlink it on close (Python 3.13 would try to).
+            self._server = await asyncio.start_unix_server(
+                self._client, sock=sock, limit=MAX_LINE, cleanup_socket=False
+            )
+        elif path is not None:
+            _remove_stale_socket(path)
+            old = os.umask(0o117)  # the socket is created 0660: group access is the contract's access control
+            try:
+                self._server = await asyncio.start_unix_server(self._client, path=str(path), limit=MAX_LINE)
+            finally:
+                os.umask(old)
         self._sweeper = asyncio.ensure_future(self._sweep_expired())
-        log.info("control socket listening on %s", path)
+        log.info("control socket listening on %s", path if path is not None else "the socket from systemd")
 
     async def stop(self) -> None:
         if self._sweeper is not None:

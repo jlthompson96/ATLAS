@@ -1,6 +1,6 @@
 # ATLAS services, v1
 
-**Schema revision:** 1.4.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
+**Schema revision:** 1.5.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
 
 This file is the single source for service names, Unix users, listeners, secrets and egress allowlists. nftables rules, systemd units, the egress proxy config and the audit `actor` enum are all generated from or checked against it.
 
@@ -117,6 +117,8 @@ Credential names are the `LoadCredentialEncrypted=` IDs. A service can read only
 
 The WireGuard private key is owned by root (`systemd-networkd`), not by any ATLAS service. The nightly backup runs as `atlas-backup` from a timer and writes only to a USB drive that root (`atlas-backup-mount.service`) mounts at `/mnt/atlas-backup` for the length of the run (ADR 0002). Its repository password is a credential on the Pi plus a paper copy offline; it never enters a Claude Code session.
 
+`atlas-ui`'s certificate is signed by the ATLAS local CA, which is created on the Pi and keeps **no private key**: the CA key signs the one server certificate and is then deleted, so a stolen card can't mint certificates that the owner's devices trust. Renewal makes a new CA and a new certificate, and each device trusts the new CA once. The CA certificate and the server certificate are public and live in `/etc/atlas/tls/` (root-owned, world-readable); only the server key is a credential (`tls-key`).
+
 ## 5. Per-unit sandbox baseline
 
 Every Pi unit starts from this baseline and relaxes only what it needs (documented in the unit file):
@@ -161,6 +163,7 @@ StateDirectory=atlas/<name>   # on the data partition, /var/lib/atlas/<name>
 
 - ATLAS code lives on the data partition as versioned releases: `/var/lib/atlas/releases/<version>/`, with `/var/lib/atlas/current` a symlink to the active one. Deploys don't need the read-only root turned off.
 - Releases are owned by `root`, mode `0755`/`0644`, and are read-only to every service (`ProtectSystem=strict` already enforces this; only each service's `StateDirectory` is writable).
+- A release holds `backend/`, `contracts/`, `deploy/`, `venv/<service>/` and `hud/`. `hud/` is the built HUD: static files built on the admin device from the committed `frontend/hud` (`npm ci --ignore-scripts`, `npm run build`), served read-only by `atlas-ui` from `/var/lib/atlas/current/hud`. There is no Node on the Pi. `atlas-release` accepts `hud/` like the other entries: regular files and directories only.
 - Unit files start code through the symlink (`ExecStart=/var/lib/atlas/current/...`), never through a versioned path.
 - A deploy copies a new release over SSH from the admin device, then switches the symlink and restarts units. Rollback switches the symlink back. Keep the last 3 releases.
 - Reserved names under `/var/lib/atlas/`; no service may be named after them:

@@ -153,7 +153,7 @@ def test_f2_the_script_no_longer_reads_anything_privileged_from_the_tarball() ->
     text = RELEASE.read_text()
     assert "partial/deploy/provisioning/services.conf" not in text  # the service list is /etc/atlas/services.conf
     assert "CONF=/etc/atlas/services.conf" in text
-    assert 'ALLOWED_TOP="backend contracts deploy wheels"' in text
+    assert 'ALLOWED_TOP="backend contracts deploy hud wheels"' in text
     assert 'install -d -m 700 "$partial"' in text
     assert "install -d -m 755" not in text
     for needle in (

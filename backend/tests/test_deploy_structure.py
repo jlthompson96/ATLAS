@@ -137,7 +137,13 @@ def test_services_conf_lists_exactly_the_pi_services() -> None:
         if ln.strip() and not ln.startswith("#")
     ]
     assert sorted(name for name, _ in lines) == PI_SERVICES
-    assert {name for name, enable in lines if enable == "yes"} == {"atlas-audit", "atlas-egress"}  # Phase 0-1 only
+    # Phase 0-1, plus atlas-core and atlas-ui for the HUD on the Pi (Phase 2)
+    assert {name for name, enable in lines if enable == "yes"} == {
+        "atlas-audit",
+        "atlas-egress",
+        "atlas-core",
+        "atlas-ui",
+    }
 
 
 @pytest.mark.parametrize("name", PI_SERVICES)
@@ -253,7 +259,13 @@ def test_credentials_match_services_md_exactly(name: str) -> None:
     for entry in declared:
         cred, path = entry.split(":", 1)
         assert path == f"/var/lib/atlas/credentials/{name}/{cred}.cred"
-    assert not u.values("LoadCredential") and not u.values("SetCredential") and not u.values("EnvironmentFile")
+    assert not u.values("LoadCredential") and not u.values("EnvironmentFile")
+    # SetCredential= would put a secret in the unit file. The one allowed use is a BLANK default (a single newline, `\n`:
+    # a unit file ignores an empty value) for a credential the unit also loads encrypted (atlas-core's LM Studio token
+    # before the desktop is linked).
+    for default in u.values("SetCredential"):
+        cred, value = default.split(":", 1)
+        assert value == "\\n" and cred in names, default
 
 
 def test_credentials_table_was_parsed() -> None:
@@ -533,7 +545,8 @@ def test_nft_variables_are_all_defined_in_the_site_example() -> None:
     site = (DEPLOY / "nftables" / "site.nft.example").read_text()
     defined = set(re.findall(r"^define (\w+) =", site, flags=re.M))
     used = set(re.findall(r"\$(\w+)", "\n".join(NFT_ACTIVE)))
-    assert used == defined, (used - defined, defined - used)
+    not_rules = {"PI_LAN_IP"}  # site values read by provision-pi.sh and gen-ui-keys.sh, not by the rules
+    assert used == defined - not_rules, (used - defined, defined - used - not_rules)
     assert 'include "/etc/atlas/nftables-site.nft"' in NFT_ACTIVE
 
 
@@ -623,7 +636,12 @@ def test_provision_dry_run_changes_nothing_and_lists_every_service() -> None:
     for name in PI_SERVICES:
         assert "useradd" in result.stderr and name in result.stderr
     assert "groupadd --system atlas-audit-clients" in result.stderr
-    assert "systemctl enable atlas-audit.service atlas-egress.service atlas-audit.socket" in result.stderr
+    # Only services whose credentials exist are enabled (none exist on this machine); the others are named.
+    assert "systemctl enable atlas-egress.service atlas-audit.socket" in result.stderr
+    for name in ("atlas-audit", "atlas-core", "atlas-ui"):
+        assert f"note    {name}.service not enabled yet; missing: " in result.stderr
+    assert "lmstudio-api-token" not in result.stderr  # optional: an empty default until the desktop is linked
+    assert "PI_LAN_IP in " in result.stderr
     assert "nft -c -f /etc/atlas/atlas.nft" in result.stderr  # the ruleset is validated before it is enabled
     assert "dry-run" in result.stderr
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,7 +26,7 @@ class UiConfig:
     tls_key: Path
     device_key: bytes = field(repr=False)
     pin_hash: str = field(repr=False)
-    state_dir: Path = Path("/var/lib/atlas/atlas-ui")
+    state_dir: Path = Path("/var/lib/atlas/ui")  # the unit's StateDirectory=atlas/ui
     static_dir: Path = Path("/var/lib/atlas/current/hud")
     core_socket: Path = Path("/run/atlas/core.sock")
     #: Addresses to bind: the Pi's LAN IP and loopback (services.md section 2). Never 0.0.0.0 by default.
@@ -70,6 +71,13 @@ def load_config(
     hosts: tuple[str, ...] = ("127.0.0.1",),
     extra_origins: tuple[str, ...] = (),
 ) -> UiConfig:
+    for host in hosts:
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            raise ConfigError(f"--host must be an IP address, got {host!r}") from None
+        if addr.is_unspecified:  # services.md section 2: the LAN address and loopback, never every address
+            raise ConfigError(f"--host {host} would listen on every address; give the Pi's LAN address")
     defaults = UiConfig(port, tls_cert, credentials / TLS_KEY_CRED, b"", "")
     return UiConfig(
         port=port,

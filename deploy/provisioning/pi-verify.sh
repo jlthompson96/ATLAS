@@ -111,7 +111,7 @@ pending="$(grep -E "^(${templates:-none})\.service: Command .* is not executable
 other="$(grep -vxF -f <(printf '%s\n' "$pending") <<<"$verify_out" | sed '/^$/d' || true)"
 if [ -n "$pending" ]; then note "[systemd-analyze verify] later-phase templates without their program yet: $(cut -d: -f1 <<<"$pending" | paste -sd' ' -)"; fi
 if [ -z "$other" ]; then pass "[systemd-analyze verify] all atlas units clean"; else fail "[systemd-analyze verify] $(head -3 <<<"$other" | tr '\n' ' ')"; fi
-for unit in atlas-audit atlas-egress atlas-backup; do
+for unit in atlas-audit atlas-egress atlas-backup atlas-core atlas-ui; do
   [ -f "$UNITS/$unit.service" ] || { note "[security] $unit.service not installed"; continue; }
   level="$(systemd-analyze security --no-pager "$unit.service" 2>/dev/null | tail -1 | sed -n 's/.*exposure level for [^:]*: *//p')"
   case "$level" in
@@ -203,6 +203,22 @@ if ip link show wg0 >/dev/null 2>&1; then
   if systemctl is-enabled --quiet systemd-networkd-wait-online.service 2>/dev/null; then fail "[wireguard] systemd-networkd-wait-online is enabled (boot delay)"; else pass "[wireguard] networkd wait-online not enabled"; fi
 else
   note "[wireguard] no wg0 yet (runbook wireguard.md)"
+fi
+
+# --- atlas-ui: listeners, certificate, no CA key (runbook ui-on-pi.md) -------------------------------------------------
+if systemctl is-active --quiet atlas-ui.service; then
+  ui_lan="$(pi_lan_ip "$SITE")"
+  listeners="$(ss -Htln 'sport = :443' | awk '{print $4}' | sort | tr '\n' ' ')"
+  expected="$(printf '%s\n' "127.0.0.1:443" "$ui_lan:443" | sort | tr '\n' ' ')"
+  if [ "$listeners" = "$expected" ]; then pass "[ui] :443 only on 127.0.0.1 and $ui_lan"; else fail "[ui] :443 listeners: ${listeners:-none} (expected $expected)"; fi
+  if openssl x509 -in /etc/atlas/tls/atlas-ui.crt -noout -checkend $((30 * 86400)) >/dev/null 2>&1; then
+    pass "[ui] certificate valid for 30 days or more"
+  else
+    fail "[ui] certificate expires within 30 days (gen-ui-keys.sh --renew-tls)"
+  fi
+  if grep -rlq "PRIVATE KEY" /etc/atlas 2>/dev/null; then fail "[ui] a private key file is in /etc/atlas"; else pass "[ui] no private key in /etc/atlas (the CA keeps none)"; fi
+else
+  note "[ui] atlas-ui not running (runbook ui-on-pi.md)"
 fi
 
 # --- N4: clean stop with atlas-egress connected (restarts atlas-audit) -----------------------------------------------

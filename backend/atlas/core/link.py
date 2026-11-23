@@ -40,8 +40,13 @@ from atlas.power.wol import DEFAULT_BROADCAST, DEFAULT_PORT, UdpWolSender
 SPOKEN_PROGRESS_S = (15, 35)  # PLAN.md 5.4: "still waking" lines
 
 
-def add_link_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--backend", choices=("fake", "lmstudio"), default="fake", help="LLM backend (default: fake)")
+def add_link_arguments(
+    parser: argparse.ArgumentParser,
+    backends: tuple[str, ...] = ("fake", "lmstudio"),
+    backend_help: str = "LLM backend (default: fake)",
+) -> None:
+    """``backends[0]`` is the default."""
+    parser.add_argument("--backend", choices=backends, default=backends[0], help=backend_help)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="LM Studio URL, http://host:port")
     parser.add_argument(
         "--token-file", default=None, help="file holding the LM Studio API token (default: $CREDENTIALS_DIRECTORY)"

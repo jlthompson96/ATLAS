@@ -26,7 +26,7 @@ from atlas.ui_server.app import build_server
 from atlas.ui_server.config import ConfigError, credentials_dir, load_config
 from atlas.ui_server.devices import PairingStore
 
-DEFAULT_STATE = Path("/var/lib/atlas/atlas-ui")
+DEFAULT_STATE = Path("/var/lib/atlas/ui")  # the unit's StateDirectory=atlas/ui
 
 
 def _state_dir(args: argparse.Namespace) -> Path:
