@@ -64,6 +64,8 @@ def cfg(tmp_path: Path) -> Config:
         (root / d).mkdir(parents=True)
     host_key = tmp_path / "credential.secret"
     host_key.write_bytes(b"\0" * 32)
+    credstore = tmp_path / "credstore.encrypted"
+    credstore.mkdir()
     creds = tmp_path / "creds"
     creds.mkdir()
     (creds / "backup-repo-password").write_text(MOCK_PASSWORD)
@@ -80,6 +82,7 @@ def cfg(tmp_path: Path) -> Config:
         etc_atlas=etc,
         state_root=root,
         host_key=host_key,
+        credstore=credstore,
         drive_file=run_dir / "drive",
         today=dt.date(2026, 11, 24),
     )
@@ -123,6 +126,7 @@ def test_backup_paths_follow_adr_0002(cfg: Config) -> None:
         root / "egress",
         root / "backup",  # core has no directory yet, so it is skipped
         cfg.host_key,
+        cfg.credstore,  # the WireGuard key credential
     ]
     for excluded in ("releases", "logs", "incoming", "current", "previous"):
         assert root / excluded not in paths
@@ -184,9 +188,11 @@ def test_missing_required_directory_fails(cfg: Config) -> None:
     assert not status.ok and status.step == "paths"
 
 
-def test_host_key_is_optional(cfg: Config) -> None:
+def test_host_key_and_credstore_are_optional(cfg: Config) -> None:
     cfg.host_key.unlink()
-    assert cfg.host_key not in backup_paths(cfg)
+    cfg.credstore.rmdir()
+    paths = backup_paths(cfg)
+    assert cfg.host_key not in paths and cfg.credstore not in paths
 
 
 def test_incomplete_snapshot_fails_and_logs_no_paths(cfg: Config) -> None:

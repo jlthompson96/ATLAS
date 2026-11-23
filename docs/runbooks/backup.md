@@ -4,7 +4,7 @@ Source: [ADR 0002](../adr/0002-backup-restic-usb.md), PLAN §2.7 (R-BAK), contra
 
 **What it does.** At 05:30 every night, `atlas-backup.timer` starts `atlas-backup.service`. Its root helper, `atlas-backup-mount.service`, first mounts whichever of the two listed drives is plugged in at `/mnt/atlas-backup`. The backup then runs as `atlas-backup` (read everything, write only the drive, no network). It unlocks stale locks, backs up, forgets old snapshots (14 daily + 4 weekly), and checks the repository; on the 1st of the month it also reads back a quarter of the data. When it finishes, the drive is unmounted. The result is one line in the journal and in `/var/lib/atlas/backup/status`.
 
-**What's in it:** `/etc/atlas`, `/var/lib/atlas/credentials`, every service's state directory under `/var/lib/atlas/` (the audit log today), and the host key `/var/lib/systemd/credential.secret`. **Left out:** releases (rebuilt from git), `logs/` (the journal), the root filesystem (the golden image covers it).
+**What's in it:** `/etc/atlas`, `/var/lib/atlas/credentials`, every service's state directory under `/var/lib/atlas/` (the audit log today), the host key `/var/lib/systemd/credential.secret`, and `/etc/credstore.encrypted` (the Pi's WireGuard key). **Left out:** releases (rebuilt from git), `logs/` (the journal), the root filesystem (the golden image covers it).
 
 **How long deleted data survives.** Anything deleted on the Pi, whether a "forget", a retention purge or audit crypto-shredding, stays in the backups for up to about 5 weeks on the plugged-in drive, and about 9 weeks counting the offline one.
 

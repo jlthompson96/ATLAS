@@ -44,6 +44,8 @@ class Config:
     etc_atlas: Path = Path("/etc/atlas")  # config, site firewall file, backup.conf, services.conf
     state_root: Path = Path("/var/lib/atlas")  # credentials/ and each service's state directory
     host_key: Path = Path("/var/lib/systemd/credential.secret")  # owner's decision 2026-11-23: back it up
+    # root's own systemd-creds credentials: the Pi's WireGuard key (runbook wireguard.md)
+    credstore: Path = Path("/etc/credstore.encrypted")
     drive_file: Path | None = None  # written by atlas-backup-mount: the drive's name from backup.conf (A or B)
     restic: str = "/usr/bin/restic"
     today: dt.date = field(default_factory=lambda: dt.datetime.now(dt.UTC).date())
@@ -110,6 +112,8 @@ def backup_paths(cfg: Config) -> list[Path]:
     paths = [*fixed, *service_state_dirs(cfg.services_conf, cfg.state_root)]
     if cfg.host_key.is_file():
         paths.append(cfg.host_key)
+    if cfg.credstore.is_dir():
+        paths.append(cfg.credstore)
     return paths
 
 

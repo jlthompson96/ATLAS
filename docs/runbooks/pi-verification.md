@@ -26,7 +26,7 @@ A disposable clone of the VM (`limactl clone atlas atlas-test`) was provisioned 
 | `base-os.sh` (branch `pi-bringup`, 2026-11-20, disposable clone, stock-like `/boot/firmware` files) | `apply --dry-run` writes nothing. `apply` writes the journald, rpi-swap and sshd drop-ins, and appends the radio lines to `config.txt` under `[all]` after the stock `[cm5]` section. A second `apply` changes nothing ("Nothing needs a reboot"). After it, from the Mac: key login works, and password and root logins get `Permission denied (publickey)`. Only with `ControlPath=none`: Lima's shared connection otherwise "passes" the refusal check, so the runbook now says so. `check` on real `sshd -T`, `systemd-analyze cat-config`, `findmnt` and `dpkg-query` gives PASS for everything the VM has; it gives FAIL only for what the VM lacks (4 GB RAM, no `vcgencmd`, no `overlayroot`, no data partition, no swap). `inventory` prints no MAC, serial or IP. Backend on 3.13.5: 1380 passed, 2 skipped; shellcheck clean. |
 | FI-3 (power cut) | **3 hard VM stops** (`limactl stop -f`) under `fi3-audit-load.sh`. Every boot: audit active, the chain verifies, no warnings, no `OUTCOME_UNKNOWN`, no fsynced record lost. The full test is 20 cuts on the Pi's card. |
 
-Not done in the VM: segment rotation and sealing (`+i`, needs a day or size rollover), purge on real ext4, the IPv6 checks (the VM network has no IPv6), WireGuard and the D1 mark, and the MDWE measurements for services that don't exist yet.
+Not done in the VM: segment rotation and sealing (`+i`, needs a day or size rollover), purge on real ext4, the IPv6 checks (the VM network has no IPv6), and the MDWE measurements for services that don't exist yet.
 
 ## Firewall (PT-1)
 
@@ -72,6 +72,17 @@ Not done in the VM: segment rotation and sealing (`+i`, needs a day or size roll
 - [ ] Audit records appear in the audit log for allowed, denied and unreachable cases, and **stopping `atlas-audit` stops new tunnels** (fail closed).
 - [x] Run the audit and egress test suites under **Python 3.13** (the target); on the Mac they ran under 3.15, so a 3.13-only difference (for example in `asyncio`, `ipaddress.is_global`) would not have shown. **VM 2026-11-20:** the full backend suite passes on 3.13.5 (1320 passed, 1 skipped: the HUD build), including the N1–N5 and G1 regression tests. Pi still to do.
 - [ ] Per-caller tunnel-open limit (N3: 2/s, burst 30, `429`) does not trip under honest load: a SearXNG fan-out and a Gmail sync in a busy session; `atlas-egress`'s audit budget (30/s, burst 300) is never hit.
+
+## WireGuard link (Phase 1, runbook wireguard.md)
+
+VM 2026-11-23: networkd `wg0` from the encrypted credential, the mark, the firewall and NetworkManager coexistence all passed (runbook, "Tested in the ARM64 VM"). On the real hardware:
+
+- [ ] `gen-wg-key.sh` stores the key; `systemd-networkd` brings up `wg0` with `fwmark 0x5182` and `10.77.0.1/32`; `nmcli device` shows `wg0` unmanaged.
+- [ ] Boot isn't delayed: `systemd-analyze blame` has no `systemd-networkd-wait-online`.
+- [ ] `atlas-core` pings `10.77.0.2` and gets a handshake; `nobody` can't.
+- [ ] From the Mac, the desktop's 1234 and 8770 time out (`desktop-firewall.ps1` block rule), even though LM Studio's own allow rule exists.
+- [ ] The tunnel comes back by itself after the desktop sleeps and is woken, and after a Pi reboot with the overlay on.
+- [ ] B12: request round trip with and without the tunnel.
 
 ## Backup (ADR 0002, PT-9)
 

@@ -62,6 +62,15 @@ Dev checks (from `hostd/`, venv built from the shared lock with `--require-hashe
 
 `mypy` is configured with `platform = "win32"` so the ctypes code is type-checked on the Mac.
 
+## Desktop firewall for the ATLAS link (Phase 1)
+
+`scripts/desktop-firewall.ps1` creates the Windows Defender Firewall rules from PLAN §5.1/§5.3 in their own `ATLAS` group:
+- WireGuard (UDP 51820) from the Pi's LAN address
+- LM Studio (1234) and `atlas-hostd` (8770) only from `10.77.0.1` to `10.77.0.2` inside the tunnel
+- a block rule on 1234 and 8770 for every other address, which overrides any broad "allow LM Studio" rule
+
+Without `-Apply` it only shows the plan; `-Remove` takes the group away. Steps in [docs/runbooks/wireguard.md](../docs/runbooks/wireguard.md); checked statically only (`tests/test_firewall_script.py`).
+
 ## Wake-on-LAN test tool
 
 ```sh
