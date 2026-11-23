@@ -10,7 +10,8 @@
 # uncommitted files, tests, virtualenvs or secrets), the HUD built from `git archive HEAD` of frontend/hud (hud/; no
 # Node on the Pi), plus the hash-verified aarch64 wheels for each lock so the Pi installs offline. A new release directory is unpacked beside the others, then the `current` symlink is switched
 # and the enabled units restarted by `atlas-release` on the Pi. The last 3 releases are kept. A failed health check
-# switches back automatically. Each deploy writes a few MB to the microSD (PLAN 3.5).
+# switches back automatically. A deploy that changes no dependency writes about 10 MiB to the microSD; venvs whose lock
+# changed are rebuilt (known issue R1, PLAN 3.5).
 #
 # Placeholders only: PI_HOST has no default and the placeholder host is refused for a real run.
 set -euo pipefail
@@ -90,12 +91,23 @@ else
 fi
 
 # Wheels for each per-service lock: downloaded on this Mac, hash-checked against the lock, installed offline on the Pi.
+# Left out for a service whose venv the Pi's active release can reuse (same lock; known issue R1): the Pi answers
+# `atlas-release locks` with "<service> <lock sha256>" lines. An older atlas-release prints its usage instead, which
+# matches nothing, so every wheel is sent.
 pip=python3
 [ ! -x "$repo/backend/.venv/bin/python" ] || pip="$repo/backend/.venv/bin/python"
+reusable=""
+if [ "$DRY_RUN" != "1" ]; then
+  reusable="$(ssh "${ssh_opts[@]}" "$PI_USER@$PI_HOST" "${release_cmd[@]}" locks 2>/dev/null | grep -E '^[a-z]+ [0-9a-f]{64}$' || true)"
+fi
 for lock in "$stage"/backend/requirements-*.lock; do
   [ -e "$lock" ] || continue
   short="$(basename "$lock" .lock)"
   short="${short#requirements-}"
+  if printf '%s\n' "$reusable" | grep -Fqx "$short $(shasum -a 256 "$lock" | cut -d' ' -f1)"; then
+    log "wheels: $short left out (the Pi's active release has a venv for this exact lock)"
+    continue
+  fi
   mkdir -p "$stage/wheels/$short"
   if [ "$DRY_RUN" = "1" ]; then
     log "[dry-run] would download aarch64 wheels for $short into the tarball"
