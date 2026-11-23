@@ -11,6 +11,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -91,13 +92,20 @@ def stage(tmp_path: Path, members: dict[str, Any]) -> tuple[Path, str]:
     return base, hashlib.sha256(tarball.read_bytes()).hexdigest()
 
 
+def fake_python(tmp_path: Path) -> Path:
+    """Stands in for /usr/bin/python3: reports 3.13.5, and does nothing for the 3.13 check, venv or compileall."""
+    path = tmp_path / "python3"
+    path.write_text('#!/bin/sh\ncase "$*" in *platform*) echo 3.13.5 ;; esac\n')
+    path.chmod(0o755)
+    return path
+
+
 def install(tmp_path: Path, sha: str, extra: str = "") -> subprocess.CompletedProcess[str]:
     base = tmp_path / "base"
     return bash(
         f"""
 BASE="{base}"; CONF="{tmp_path / "services.conf"}"
-SCRATCH="{tmp_path / "scratch"}"; BUILD_RUNTIME="{tmp_path / "build"}"; MIN_SCRATCH_KB=1
-python3() {{ case "$*" in *platform*) echo 3.13.5 ;; esac; }}  # no 3.13 check, venv or compileall; a fixed version
+SCRATCH="{tmp_path / "scratch"}"; SCRATCH_MARGIN_KB=1; PY3="{fake_python(tmp_path)}"
 chown() {{ :; }}    # an unprivileged run
 {extra}
 cmd_install "{V}" "{sha}"
@@ -368,8 +376,16 @@ def active_release(
     (venv / "lib" / "cryptography.so").write_bytes(b"x" * 4096)
     if pip:
         (venv / "bin" / "pip").write_text("#!/bin/sh\n")
+    write_manifest(venv, old / "venv" / "atlas-audit.sha256")
     (base / "current").symlink_to(f"releases/{OLD}")
     return venv
+
+
+def write_manifest(venv: Path, manifest: Path) -> None:
+    """What atlas-release's venv_manifest writes: sha256sum lines for ./<path>, in byte order."""
+    files = sorted((p for p in venv.rglob("*") if p.is_file() and not p.is_symlink()), key=lambda p: str(p).encode())
+    rels = sorted(("./" + str(p.relative_to(venv)) for p in files), key=str.encode)
+    manifest.write_text("".join(f"{hashlib.sha256((venv / r[2:]).read_bytes()).hexdigest()}  {r}\n" for r in rels))
 
 
 @needs_gnu_tar
@@ -386,38 +402,122 @@ def test_r1_an_unchanged_lock_reuses_the_venv_as_hard_links_without_wheels(tmp_p
     assert list((tmp_path / "scratch").iterdir()) == []
 
 
-@pytest.mark.parametrize("why", ["lock", "pip", "python", "no-current"])
+@pytest.mark.parametrize("why", ["lock", "pip", "python", "no-current", "corrupt", "extra-file", "no-manifest"])
 @needs_gnu_tar
 def test_r1_anything_but_an_exact_match_needs_wheels(tmp_path: Path, why: str) -> None:
     no_wheels = {k: v for k, v in CLEAN.items() if not k.startswith("wheels/")}  # what deploy.sh sends after `locks`
     base, sha = stage(tmp_path, {**no_wheels, "backend/requirements-audit.lock": LOCK})
     if why != "no-current":
         other = LOCK.replace(b"2.1.1", b"2.1.0") if why == "lock" else LOCK
-        active_release(tmp_path, base, lock=other, pip=why == "pip", version="3.13.4" if why == "python" else "3.13.5")
+        venv = active_release(
+            tmp_path, base, lock=other, pip=why == "pip", version="3.13.4" if why == "python" else "3.13.5"
+        )
+        if why == "corrupt":  # a flipped byte on the card
+            (venv / "lib" / "cryptography.so").write_bytes(b"y" + b"x" * 4095)
+        if why == "extra-file":  # something added that the manifest doesn't list
+            (venv / "lib" / "evil.pth").write_text("import os\n")
+        if why == "no-manifest":  # a venv from before the manifests
+            (venv.parent / "atlas-audit.sha256").unlink()
     result = install(tmp_path, sha)
     assert result.returncode != 0
     assert "no wheels for atlas-audit" in result.stderr
     assert [p.name for p in (base / "releases").iterdir() if p.name != OLD] == []
 
 
-@needs_gnu_tar
-def test_r1_venvs_are_built_in_ram_and_lose_pip(tmp_path: Path) -> None:
-    members = {**CLEAN, "backend/requirements-audit.lock": LOCK, "wheels/audit/a-1-py3-none-any.whl": b"zip"}
-    base, sha = stage(tmp_path, members)
-    fake_build = f"""
+def fake_builder(tmp_path: Path, extra: str = "") -> str:
+    """systemd-run that records its arguments and streams back a small venv as a tar on stdout."""
+    src = tmp_path / "built"
+    return f"""
 systemd-run() {{
   printf '%s\\n' "$@" >"{tmp_path / "args"}"
-  mkdir -p "$BUILD_RUNTIME/atlas-audit/venv/lib" && echo built >"$BUILD_RUNTIME/atlas-audit/venv/lib/x"
+  rm -rf "{src}"; mkdir -p "{src}/lib" "{src}/bin"
+  echo built >"{src}/lib/x"; echo "version = 3.13.5" >"{src}/pyvenv.cfg"
+  ln -s /usr/bin/python3 "{src}/bin/python3"; ln -s python3 "{src}/bin/python"
+  {extra}
+  tar -C "{src}" -cf - .
 }}
 """
-    result = install(tmp_path, sha, fake_build)
+
+
+WHEELED = {**CLEAN, "backend/requirements-audit.lock": LOCK, "wheels/audit/a-1-py3-none-any.whl": b"zip"}
+
+
+@needs_gnu_tar
+def test_r1_venvs_are_built_in_ram_streamed_back_and_lose_pip(tmp_path: Path) -> None:
+    base, sha = stage(tmp_path, WHEELED)
+    result = install(tmp_path, sha, fake_builder(tmp_path))
     assert result.returncode == 0, result.stderr
     args = (tmp_path / "args").read_text()
-    assert "RuntimeDirectory=atlas-build/atlas-audit" in args and "StateDirectory" not in args
-    assert "pip --isolated uninstall --quiet --yes pip" in args
-    assert (base / "releases" / V / "venv" / "atlas-audit" / "lib" / "x").read_text() == "built\n"
-    assert not (tmp_path / "build").exists()  # nothing of the build left in RAM, not even the parent
+    assert "RuntimeDirectory=atlas-build/atlas-audit" in args
+    assert "StateDirectory" not in args and "RuntimeDirectoryPreserve" not in args  # nothing left under a dynamic UID
+    assert "pip --isolated uninstall --quiet --yes pip" in args and "tar -C" in args
+    venv = base / "releases" / V / "venv" / "atlas-audit"
+    assert (venv / "lib" / "x").read_text() == "built\n"
+    assert (venv / "bin" / "python3").readlink() == Path("/usr/bin/python3")
+    manifest = (base / "releases" / V / "venv" / "atlas-audit.sha256").read_text()
+    assert (
+        manifest
+        == f"{hashlib.sha256(b'built\n').hexdigest()}  ./lib/x\n{hashlib.sha256(b'version = 3.13.5\n').hexdigest()}  ./pyvenv.cfg\n"
+    )
     assert list((tmp_path / "scratch").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ('ln -s /etc "{src}/lib/etc"', "unexpected symlink"),
+        ('ln "{src}/lib/x" "{src}/lib/y"', "hard links"),
+        ('mkfifo "{src}/lib/fifo"', "special files"),
+        ('rm "{src}/pyvenv.cfg"', "incomplete"),
+    ],
+)
+@needs_gnu_tar
+def test_r1_root_accepts_only_what_a_venv_holds(tmp_path: Path, extra: str, message: str) -> None:
+    base, sha = stage(tmp_path, WHEELED)
+    result = install(tmp_path, sha, fake_builder(tmp_path, extra.format(src=tmp_path / "built")))
+    assert result.returncode != 0 and message in result.stderr, result.stderr
+    assert list((base / "releases").iterdir()) == [] and list((tmp_path / "scratch").iterdir()) == []
+
+
+@needs_gnu_tar
+def test_r1_a_reused_venv_carries_its_manifest_and_is_checked(tmp_path: Path) -> None:
+    no_wheels = {k: v for k, v in CLEAN.items() if not k.startswith("wheels/")}
+    base, sha = stage(tmp_path, {**no_wheels, "backend/requirements-audit.lock": LOCK})
+    active_release(tmp_path, base)
+    assert install(tmp_path, sha).returncode == 0
+    new = base / "releases" / V / "venv"
+    assert (new / "atlas-audit.sha256").read_text() == (
+        base / "releases" / OLD / "venv" / "atlas-audit.sha256"
+    ).read_text()
+
+
+def test_r1_prune_removes_what_interrupted_installs_left(tmp_path: Path) -> None:
+    releases = tmp_path / "releases"
+    for name in (".inst.abc123", ".work.def456", ".in.ghi789"):
+        (releases / name / "venv").mkdir(parents=True)
+    (tmp_path / "legacy").mkdir()
+    result = bash(f'BASE="{tmp_path}"; LEGACY_BUILD="{tmp_path / "legacy"}"; cmd_prune')
+    assert result.returncode == 0, result.stderr
+    assert list(releases.iterdir()) == [] and not (tmp_path / "legacy").exists()
+
+
+def test_r1_only_one_atlas_release_at_a_time(tmp_path: Path) -> None:
+    if shutil.which("flock") is None:
+        pytest.skip("flock is util-linux: runs in the ARM64 VM")
+    lock = tmp_path / "lock"
+    holder = subprocess.Popen(["flock", str(lock), "sleep", "5"])  # noqa: S603, S607
+    try:
+        for _ in range(50):
+            if lock.exists():
+                break
+            time.sleep(0.05)
+        result = bash(f'id() {{ echo 0; }}; LOCK_FILE="{lock}"; main prune')
+        assert result.returncode != 0 and "another atlas-release is running" in result.stderr
+        listed = bash(f'id() {{ echo 0; }}; LOCK_FILE="{lock}"; BASE="{tmp_path}"; main list')
+        assert listed.returncode == 0  # read-only commands don't wait for the lock
+    finally:
+        holder.kill()
+        holder.wait()
 
 
 def test_r1_locks_lists_only_reusable_venvs(tmp_path: Path) -> None:
@@ -425,7 +525,7 @@ def test_r1_locks_lists_only_reusable_venvs(tmp_path: Path) -> None:
     (base / "releases").mkdir(parents=True)
     (tmp_path / "services.conf").write_text("atlas-audit yes\natlas-core yes\n")
     active_release(tmp_path, base)
-    snippet = f'BASE="{base}"; CONF="{tmp_path / "services.conf"}"; python3() {{ echo 3.13.5; }}; cmd_locks'
+    snippet = f'BASE="{base}"; CONF="{tmp_path / "services.conf"}"; PY3="{fake_python(tmp_path)}"; cmd_locks'
     result = bash(snippet)
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"audit {hashlib.sha256(LOCK).hexdigest()}\n"  # atlas-core has no venv there: not listed
@@ -436,4 +536,4 @@ def test_r1_locks_lists_only_reusable_venvs(tmp_path: Path) -> None:
 def test_r1_deploy_leaves_out_only_wheels_the_pi_reported() -> None:
     text = (DEPLOY / "provisioning" / "deploy.sh").read_text()
     assert "\"${release_cmd[@]}\" locks 2>/dev/null | grep -E '^[a-z]+ [0-9a-f]{64}$'" in text
-    assert 'grep -qx "$short $(shasum -a 256 "$lock" | cut -d\' \' -f1)"' in text
+    assert 'grep -Fqx "$short $(shasum -a 256 "$lock" | cut -d\' \' -f1)"' in text

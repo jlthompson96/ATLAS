@@ -10,7 +10,8 @@
 # uncommitted files, tests, virtualenvs or secrets), the HUD built from `git archive HEAD` of frontend/hud (hud/; no
 # Node on the Pi), plus the hash-verified aarch64 wheels for each lock so the Pi installs offline. A new release directory is unpacked beside the others, then the `current` symlink is switched
 # and the enabled units restarted by `atlas-release` on the Pi. The last 3 releases are kept. A failed health check
-# switches back automatically. Each deploy writes a few MB to the microSD (PLAN 3.5).
+# switches back automatically. A deploy that changes no dependency writes about 7 MiB to the microSD; venvs whose lock
+# changed are rebuilt (known issue R1, PLAN 3.5).
 #
 # Placeholders only: PI_HOST has no default and the placeholder host is refused for a real run.
 set -euo pipefail
@@ -103,7 +104,7 @@ for lock in "$stage"/backend/requirements-*.lock; do
   [ -e "$lock" ] || continue
   short="$(basename "$lock" .lock)"
   short="${short#requirements-}"
-  if printf '%s\n' "$reusable" | grep -qx "$short $(shasum -a 256 "$lock" | cut -d' ' -f1)"; then
+  if printf '%s\n' "$reusable" | grep -Fqx "$short $(shasum -a 256 "$lock" | cut -d' ' -f1)"; then
     log "wheels: $short left out (the Pi's active release has a venv for this exact lock)"
     continue
   fi
