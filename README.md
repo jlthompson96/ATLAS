@@ -257,6 +257,7 @@ works as one coherent design.
 | Security core | Orchestrator, policy engine, taint tracking, quarantined reader, memory, approval signing, executor verification | **Merged** after a security review and a fix round |
 | Phase 1 software | LM Studio backend, `atlas-hostd` client, Wake-on-LAN and the wake flow, local grammar for time/date/wake/sleep | **Merged**; not yet run against the real desktop |
 | Phase 2 server | `atlas-ui`: HTTPS, device pairing, step-up PIN, privacy mode, the core control socket | **Merged**; the kiosk on the Pi is still to do |
+| Phase 2 acceptance | `npm run acceptance`: the built HUD in headless Chrome at three widths, every orb state, reduced motion, the kiosk profile and the real paired `atlas-ui`; fails on any CSP violation, off-site request or serious axe finding | **Merged**; 6/6 pass. UP-1..3 and B8 need the Pi with a display |
 | ARM64 VM | Debian 13 VM on the Mac standing in for the Pi: Python 3.13, provisioning, deploy, PT-1, power cuts | **Running**; results in [pi-verification.md](docs/runbooks/pi-verification.md) |
 | Pi bring-up | From a blank card to provisioning: card layout, then `base-os.sh` for fewer card writes, key-only SSH, a pass/fail check and the hardware inventory | **Done** on the Pi, 2026-11-20: all 11 steps (base setup, provisioning, firewall, first deploy, read-only root). Results in the runbook. | [pi-bringup.md](docs/runbooks/pi-bringup.md) |
 | Backup (Phase 0) | Nightly restic backup to two rotated USB drives, `atlas-backup` with read-only access and no network, restore runbook ([ADR 0002](docs/adr/0002-backup-restic-usb.md)) | **Merged**; tested end to end in the VM, installed on the Pi in the next maintenance window |
@@ -399,6 +400,12 @@ cd ../../backend && .venv/bin/python -m atlas.ui_server.dev          # prints ht
 ```
 
 Open the URL and accept the throwaway local certificate. Enter the pairing code, type a request, and approve a proposed email with PIN `0000`. The "send" only writes to the log.
+
+The Phase 2 acceptance checks run the same pieces in headless Chrome (needs Google Chrome, or `CHROME_BIN`):
+
+```sh
+cd frontend/hud && npm run acceptance
+```
 
 ### The ARM64 VM
 
