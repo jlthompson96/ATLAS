@@ -87,6 +87,7 @@ Each run fails on a CSP violation, an off-origin request, a console error, an un
 | UP-1: kiosk 1 h, CPU ≤ 25%, frame p95 ≤ 33 ms | Needs the kiosk on the Pi (a display) | open |
 | UP-2, UP-3: with voice, thermal | Need the kiosk and Phase 3 voice | open |
 | B8: UI performance | Pi kiosk; remote browsers at 60 fps | open |
+| HUD on the Pi from a LAN browser | [ui-on-pi.md](ui-on-pi.md): real `atlas-ui` and `atlas-core` from a release, local CA, pairing, WSS; tested end to end in the ARM64 VM (headless Chrome: zero CSP violations, off-origin requests, console errors, axe findings) | VM pass; Pi after the next window |
 | Chromium kiosk on the Pi | `deploy/kiosk/` is still empty | open |
 
 ## What is where
