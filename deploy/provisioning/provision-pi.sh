@@ -128,6 +128,8 @@ install_firewall /etc/atlas "$deploy_dir/nftables"
 site_file=/etc/atlas/nftables-site.nft
 [ -f "$site_file" ] || site_file="$deploy_dir/nftables/site.nft.example"
 install_timesync "$site_file" /etc/systemd/timesyncd.conf.d/50-atlas.conf
+log "== WireGuard to the desktop (runbook wireguard.md)"
+install_wireguard "$site_file" "$deploy_dir/wireguard"
 # Known issue P2: the ATLAS units wait for time-sync.target. With systemd-time-wait-sync enabled that means "the clock
 # is synced", but its default wait is infinite: 90 s lets a Pi without internet start anyway, and the failed wait
 # then shows in systemctl --failed.

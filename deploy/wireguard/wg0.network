@@ -1,0 +1,17 @@
+# ATLAS: the Pi's end of the WireGuard tunnel to the LLM desktop (contracts/services.md section 2: Pi 10.77.0.1,
+# desktop 10.77.0.2). Installed by provision-pi.sh as /etc/systemd/network/50-atlas-wg0.network; the matching .netdev
+# is generated from the site file. systemd-networkd manages only wg0; NetworkManager keeps the LAN (it is told to
+# leave wg0 alone).
+
+[Match]
+Name=wg0
+
+[Network]
+Address=10.77.0.1/32
+
+[Route]
+Destination=10.77.0.2/32
+
+[Link]
+# The desktop sleeps most of the time; the tunnel is never a reason to hold up boot.
+RequiredForOnline=no

@@ -25,7 +25,7 @@ FSROOT=""   # prefix for directories apply creates; the tests point it at a thro
 PROC=/proc
 SYS=/sys
 
-PACKAGES="nftables python3-venv openssl sudo curl overlayroot ethtool restic"  # restic: the nightly backup (ADR 0002)
+PACKAGES="nftables python3-venv openssl sudo curl overlayroot ethtool restic wireguard-tools"  # restic: ADR 0002; wireguard-tools: wg0
 OVERLAY_ARG="overlayroot=tmpfs:recurse=0"
 REBOOT=0
 FAILS=0

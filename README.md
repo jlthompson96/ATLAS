@@ -42,6 +42,7 @@ the Pi is provisioned and runs the audit log and the egress proxy.**
   - About 1,500 backend tests, on the Mac and again on Python 3.13 in an ARM64 Debian VM (a few run on only one of the two).
   - The VM also gets the same provisioning and deploy as the Pi. Egress test PT-1 passes there, the audit log survives hard power cuts, and a release that crash-loops is rolled back automatically.
   - The nightly backup ([restic to two rotated USB drives](docs/runbooks/backup.md)) backs up, restores and refuses unknown or doubled drives in the VM. It isn't installed on the Pi yet.
+  - The [WireGuard link](docs/runbooks/wireguard.md), Pi side: in the VM, only `atlas-core` reaches the fake desktop's LM Studio and `atlas-hostd` ports under the real firewall. The Windows side (WireGuard for Windows and a firewall script) is untested until the desktop.
 - **On the Pi so far:** Pi OS installed and updated, with the final card layout (16 GiB root, 103 GiB data partition). Base setup done and checked: key-only SSH, wired only, swap in RAM, logs kept 30 days on the data partition. Provisioned: firewall loaded, first release deployed, `atlas-audit` and `atlas-egress` running, PT-1 and PT-13 pass, the root filesystem is read-only, and the boot partition (which held a copy of the admin's password hash) is readable by root only.
 - **Not yet run on real hardware:** `atlas-hostd` (only tested against a simulated Windows layer), WireGuard, and the rest of ATLAS on the Pi (core, voice, UI and the integrations).
 - **No voice yet**, which comes in Phase 3.

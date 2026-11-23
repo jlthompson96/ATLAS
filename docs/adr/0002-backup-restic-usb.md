@@ -45,6 +45,7 @@ The owner chose **restic** and a **USB drive** on 2026-11-23. The `wg0` target d
 | `/var/lib/atlas/credentials/` | `LoadCredentialEncrypted` files, still encrypted with the host key |
 | `/var/lib/atlas/<service>/` for every service | State: audit segments and `checkpoints.jsonl` now; memory DB, queue and portfolio file later |
 | `/var/lib/systemd/credential.secret` | **Open question 1.** The host key that decrypts every credential above |
+| `/etc/credstore.encrypted/` | Root's own systemd-creds credentials: the Pi's WireGuard key (added with the WireGuard link, 2026-11-23), so a restore doesn't need the desktop re-paired |
 
 | Excluded | Why |
 |---|---|
