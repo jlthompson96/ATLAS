@@ -11,7 +11,10 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from atlas.core.service import EXECUTOR_SOCKET, STATE_DIR
+from atlas.llm.lmstudio import CredentialError, read_token_file
 from atlas.ui_server.config import UiConfig
 
 REPO = Path(__file__).resolve().parents[2]
@@ -53,18 +56,28 @@ def test_ui_unit_starts_the_server_with_its_certificate_and_addresses() -> None:
     assert defaults.core_socket == Path("/run/atlas/core.sock")
 
 
+def _blank_token() -> Path:
+    import tempfile
+
+    path = Path(tempfile.mkdtemp()) / "lmstudio-api-token"
+    path.write_text("\n")  # what systemd writes for SetCredential=lmstudio-api-token:\n
+    return path
+
+
 def test_core_unit_matches_the_service_defaults() -> None:
     unit = (SYSTEMD / "atlas-core.service").read_text()
     assert "ExecStart=/var/lib/atlas/current/venv/atlas-core/bin/python -m atlas.core\n" in unit  # --backend none
     assert "StateDirectory=atlas/core\n" in unit and Path("/var/lib/atlas/core") == STATE_DIR
     assert Path("/run/atlas/executor.sock") == EXECUTOR_SOCKET
-    assert "SetCredential=lmstudio-api-token:\n" in unit  # empty default, never a value
+    assert "SetCredential=lmstudio-api-token:\\n\n" in unit  # a blank default, never a value
+    with pytest.raises(CredentialError, match="empty"):  # what a linked core does with the blank default
+        read_token_file(_blank_token())
 
 
 # --- provisioning helpers ---------------------------------------------------------------------------------------
 
 
-def test_missing_credentials_skips_only_empty_defaults(tmp_path: Path) -> None:
+def test_missing_credentials_skips_only_credentials_with_a_default(tmp_path: Path) -> None:
     present = tmp_path / "present.cred"
     present.write_text("x")
     unit = tmp_path / "u.service"
@@ -72,8 +85,8 @@ def test_missing_credentials_skips_only_empty_defaults(tmp_path: Path) -> None:
         f"LoadCredentialEncrypted=a:{present}\n"
         f"LoadCredentialEncrypted=b:{tmp_path}/b.cred\n"
         f"LoadCredentialEncrypted=c:{tmp_path}/c.cred\n"
-        "SetCredential=c:\n"
-        "SetCredential=b:not-empty\n"  # not an empty default: b is still required
+        "SetCredential=c:\\n\n"
+        "SetCredential=bb:\\n\n"  # a default for another name doesn't make b optional
     )
     r = bash('missing_credentials "$1"', str(unit))
     assert r.returncode == 0 and r.stdout == f"{tmp_path}/b.cred\n"

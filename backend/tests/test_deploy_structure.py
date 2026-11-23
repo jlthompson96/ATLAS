@@ -260,11 +260,12 @@ def test_credentials_match_services_md_exactly(name: str) -> None:
         cred, path = entry.split(":", 1)
         assert path == f"/var/lib/atlas/credentials/{name}/{cred}.cred"
     assert not u.values("LoadCredential") and not u.values("EnvironmentFile")
-    # SetCredential= would put a secret in the unit file. The one allowed use is an EMPTY default for a credential the
-    # unit also loads encrypted (atlas-core's LM Studio token before the desktop is linked).
+    # SetCredential= would put a secret in the unit file. The one allowed use is a BLANK default (a single newline, `\n`:
+    # a unit file ignores an empty value) for a credential the unit also loads encrypted (atlas-core's LM Studio token
+    # before the desktop is linked).
     for default in u.values("SetCredential"):
         cred, value = default.split(":", 1)
-        assert value == "" and cred in names, default
+        assert value == "\\n" and cred in names, default
 
 
 def test_credentials_table_was_parsed() -> None:

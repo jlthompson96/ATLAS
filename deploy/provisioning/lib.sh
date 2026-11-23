@@ -286,15 +286,16 @@ root_is_overlay() {
   [ "$(findmnt -n -o FSTYPE / 2>/dev/null)" = overlay ]
 }
 
-# missing_credentials UNIT_FILE: the LoadCredentialEncrypted= files that don't exist, one per line. A credential with an
-# empty SetCredential= default is optional (atlas-core's LM Studio token before the desktop is linked).
+# missing_credentials UNIT_FILE: the LoadCredentialEncrypted= files that don't exist, one per line. A credential with a
+# SetCredential= default is optional (atlas-core's LM Studio token before the desktop is linked; tests allow only a
+# blank default).
 missing_credentials() {
   local unit="$1" line id path
   while IFS= read -r line; do
     id="${line#LoadCredentialEncrypted=}"
     path="${id#*:}"
     id="${id%%:*}"
-    if grep -qx "SetCredential=$id:" "$unit"; then
+    if grep -q "^SetCredential=$id:" "$unit"; then
       continue
     fi
     [ -f "$path" ] || printf '%s\n' "$path"
