@@ -77,7 +77,7 @@ Start from a fresh card ([pi-bringup.md](pi-bringup.md), then [provisioning.md](
 | Google grants, `google-oauth-client` | 4, 6 | New consent for the read grant (and later the send grant), using the new client secret from step 1 |
 | Discord bot tokens | 4, 6 | The reset tokens from step 1 |
 | `twelvedata-api-key` | 4 | The regenerated key from step 1 |
-| Backup encryption key | 0 | Only if a copy of it was on the Pi (it should be printed and offline only, §2.7). If it was, make a new backup repository with a new key and destroy the old one. |
+| Backup repository password (`atlas-backup`) | 0 | It is always on the Pi (ADR 0002: the nightly run is unattended), so the thief can decrypt it with the host key. Run `gen-backup-key.sh` on the new image, then **re-key every drive you still have**, including the offline one: `restic key add` (old password, then the new one), `key remove` the old key (backup.md, "Changing the password"). Treat a drive that was plugged into the stolen Pi as lost with it. |
 
 ## What can't be rotated
 

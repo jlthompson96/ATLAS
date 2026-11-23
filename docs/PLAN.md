@@ -431,6 +431,7 @@ This deviates from the brief's "encrypt data at rest" requirement. **What someon
 | Google refresh tokens (read grant and send grant) | Yes | In "Testing" status they expire within 7 days [S28], which limits a stolen token's lifetime. Revoke at once via the theft runbook. |
 | Discord bot token | Yes, and it **does not expire** | Reset it in the Developer Portal (theft runbook). |
 | WireGuard private key, LM Studio API token | Yes | Rotate both. The desktop holds no ATLAS secrets beyond its own WireGuard key. |
+| Backup repository password (`atlas-backup` credential, ADR 0002) | Yes, through the host key on the same card. It opens **both** backup drives, including the offline one. The plugged-in drive is likely taken with the Pi. | Re-key every drive after a theft (`restic key add`, then `key remove` the old key: theft runbook). A drive taken with the Pi holds no more than the card itself. (Added 2026-11-23.) |
 | systemd-creds files | Yes: the host key sits on the same card | Still used for per-service scoping and to keep secrets out of backups and logs in the clear. It is **not** protection against theft. |
 | Email, Discord, calendar content | **No: not stored.** Panels keep metadata in RAM only and re-fetch after a reboot. | Data minimisation |
 | Memory DB, transcripts | Yes | Retention cut to 30 days (memory) and 7 days (transcripts) (§2.12) |

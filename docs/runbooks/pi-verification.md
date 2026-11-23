@@ -1,5 +1,7 @@
 # Checklist: what must be verified in the ARM64 Debian VM and on the Pi
 
+**Shortcut for the root-only, read-only items:** `sudo deploy/provisioning/pi-verify.sh` prints one PASS/FAIL/NOTE line per check, tagged with the item it covers (firewall rules and UDP blocks, DNS answers, unit verification, sandbox scores, state directories, sockets, the audit service's capability, `chattr`, MDWE and read-only views, the chain, backup and WireGuard state). `--service-checks` adds N4 (restarts `atlas-audit` once), so use it only in a maintenance window. All passed in a provisioned VM clone on 2026-11-23.
+
 Everything below was written and statically tested on the Mac (pytest structure tests, `bash -n`, `--dry-run`), but **not executed** on Linux. Tick each item in the ARM64 Debian VM first ([vm.md](vm.md)), then on the Pi, and note the result next to it. Nothing here is a benchmark: B10 and friends only count on the real card.
 
 ## VM run 2026-11-20
