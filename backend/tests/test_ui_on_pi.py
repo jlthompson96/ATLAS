@@ -185,7 +185,7 @@ def test_release_accepts_hud_and_services_md_documents_it() -> None:
 
 def test_ui_devices_runs_sandboxed_on_pipes_and_pair_refuses_tmux() -> None:
     t = text("ui-devices.sh")
-    assert 'ui_python -p ReadWritePaths=/var/lib/atlas/ui "$py" -I -c "$cli"' in t
+    assert 'ui_python -p ReadWritePaths=/var/lib/atlas/ui "$py" -I -u -c "$cli"' in t
     assert "</dev/null 2>&1 | cat" in t and "runuser" not in t
     assert '[ "${args[0]}" = pair ] && in_shared_terminal' in t
 

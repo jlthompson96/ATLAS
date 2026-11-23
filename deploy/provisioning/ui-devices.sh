@@ -43,5 +43,5 @@ fi
 cli='import sys; sys.path.insert(0, sys.argv[1] + "/backend")
 from atlas.ui_server.__main__ import main
 sys.exit(main(sys.argv[2:]))'
-ui_python -p ReadWritePaths=/var/lib/atlas/ui "$py" -I -c "$cli" "$release" "${args[@]}" --state-dir /var/lib/atlas/ui \
+ui_python -p ReadWritePaths=/var/lib/atlas/ui "$py" -I -u -c "$cli" "$release" "${args[@]}" --state-dir /var/lib/atlas/ui \
   </dev/null 2>&1 | cat
