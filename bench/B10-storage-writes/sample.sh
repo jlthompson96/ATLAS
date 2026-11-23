@@ -23,7 +23,10 @@ done
 case "$interval$hours" in
   *[!0-9]*) echo "interval and hours must be whole numbers" >&2; exit 2 ;;
 esac
-[ "$interval" -gt 0 ] && [ "$hours" -gt 0 ] || { echo "interval and hours must be > 0" >&2; exit 2; }
+if [ "$interval" -eq 0 ] || [ "$hours" -eq 0 ]; then
+  echo "interval and hours must be > 0" >&2
+  exit 2
+fi
 [ -n "$out" ] || out="/tmp/b10-$(date -u +%Y%m%dT%H%M%SZ).log"
 
 disk="${B10_DISK:-mmcblk0}"
