@@ -374,7 +374,8 @@ def active_release(
 
 @needs_gnu_tar
 def test_r1_an_unchanged_lock_reuses_the_venv_as_hard_links_without_wheels(tmp_path: Path) -> None:
-    base, sha = stage(tmp_path, {**CLEAN, "backend/requirements-audit.lock": LOCK})  # no wheels in the tarball
+    no_wheels = {k: v for k, v in CLEAN.items() if not k.startswith("wheels/")}
+    base, sha = stage(tmp_path, {**no_wheels, "backend/requirements-audit.lock": LOCK})
     old = active_release(tmp_path, base)
     result = install(tmp_path, sha, "systemd-run() { echo BUILT >&2; return 1; }")
     assert result.returncode == 0, result.stderr
@@ -388,7 +389,8 @@ def test_r1_an_unchanged_lock_reuses_the_venv_as_hard_links_without_wheels(tmp_p
 @pytest.mark.parametrize("why", ["lock", "pip", "python", "no-current"])
 @needs_gnu_tar
 def test_r1_anything_but_an_exact_match_needs_wheels(tmp_path: Path, why: str) -> None:
-    base, sha = stage(tmp_path, {**CLEAN, "backend/requirements-audit.lock": LOCK})
+    no_wheels = {k: v for k, v in CLEAN.items() if not k.startswith("wheels/")}  # what deploy.sh sends after `locks`
+    base, sha = stage(tmp_path, {**no_wheels, "backend/requirements-audit.lock": LOCK})
     if why != "no-current":
         other = LOCK.replace(b"2.1.1", b"2.1.0") if why == "lock" else LOCK
         active_release(tmp_path, base, lock=other, pip=why == "pip", version="3.13.4" if why == "python" else "3.13.5")
