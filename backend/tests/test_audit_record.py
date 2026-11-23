@@ -307,7 +307,9 @@ def test_pin_tables_match_the_schema() -> None:
 
 
 def test_service_credentials_match_services_md() -> None:
-    from tests.test_deploy_structure import md_credentials
+    from tests.test_deploy_structure import NON_AUDIT, md_credentials
 
-    declared = {service: frozenset(names) for service, names in md_credentials().items() if names}
+    # atlas-backup holds a credential but never writes audit records, so it can't log rotating it (ADR 0002)
+    declared = {s: frozenset(names) for s, names in md_credentials().items() if names and s not in NON_AUDIT}
+    assert md_credentials()["atlas-backup"] == {"backup-repo-password"}
     assert declared == SERVICE_CREDENTIALS

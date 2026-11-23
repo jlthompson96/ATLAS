@@ -39,8 +39,9 @@ the Pi is provisioned and runs the audit log and the egress proxy.**
   - Chat with your own model from a terminal, or through the HUD in a browser, with every request going through the policy engine.
   - Approve a proposed action with a PIN.
 - **Tested so far:**
-  - About 1,380 backend tests, on the Mac and again on Python 3.13 in an ARM64 Debian VM (a few run on only one of the two).
+  - About 1,500 backend tests, on the Mac and again on Python 3.13 in an ARM64 Debian VM (a few run on only one of the two).
   - The VM also gets the same provisioning and deploy as the Pi. Egress test PT-1 passes there, the audit log survives hard power cuts, and a release that crash-loops is rolled back automatically.
+  - The nightly backup ([restic to two rotated USB drives](docs/runbooks/backup.md)) backs up, restores and refuses unknown or doubled drives in the VM. It isn't installed on the Pi yet.
 - **On the Pi so far:** Pi OS installed and updated, with the final card layout (16 GiB root, 103 GiB data partition). Base setup done and checked: key-only SSH, wired only, swap in RAM, logs kept 30 days on the data partition. Provisioned: firewall loaded, first release deployed, `atlas-audit` and `atlas-egress` running, PT-1 and PT-13 pass, the root filesystem is read-only, and the boot partition (which held a copy of the admin's password hash) is readable by root only.
 - **Not yet run on real hardware:** `atlas-hostd` (only tested against a simulated Windows layer), WireGuard, and the rest of ATLAS on the Pi (core, voice, UI and the integrations).
 - **No voice yet**, which comes in Phase 3.
@@ -418,7 +419,7 @@ proposal in [contracts/proposals/](contracts/proposals/) with a revision bump, r
 | [`events.v1.schema.json`](contracts/events.v1.schema.json) | Every event between the backend and the HUD | 1.1.0 |
 | [`hostd.v1.yaml`](contracts/hostd.v1.yaml) | The Pi ↔ `atlas-hostd` API (OpenAPI) | 1.1.0 |
 | [`audit-record.v1.schema.json`](contracts/audit-record.v1.schema.json) | The audit record format | 1.2.0 |
-| [`services.md`](contracts/services.md) | Service names, users, sockets, ports, secrets and egress allowlists | 1.3.0 |
+| [`services.md`](contracts/services.md) | Service names, users, sockets, ports, secrets and egress allowlists | 1.4.0 |
 | [`llm/interface.py`](backend/atlas/llm/interface.py), [`power/interface.py`](backend/atlas/power/interface.py) | `LLMBackend` and `PowerController` | 1.0.0 |
 
 ## Layout

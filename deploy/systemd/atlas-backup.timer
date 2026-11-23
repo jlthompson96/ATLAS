@@ -1,0 +1,16 @@
+# atlas-backup.timer: start atlas-backup.service nightly at 05:30 (PLAN 2.7, ADR 0002).
+# provision-pi.sh enables it only once /etc/atlas/backup.conf lists a drive and the repository password is stored.
+
+[Unit]
+Description=ATLAS nightly backup at 05:30
+
+[Timer]
+OnCalendar=*-*-* 05:30:00
+AccuracySec=1min
+# Catch up after the Pi was off at 05:30. The stamp lives under /var/lib/systemd on the overlay root, so it only
+# covers downtime within one boot; a missed night after a reboot shows in `base-os.sh check` (last success > 36 h).
+Persistent=true
+Unit=atlas-backup.service
+
+[Install]
+WantedBy=timers.target

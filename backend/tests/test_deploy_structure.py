@@ -24,6 +24,10 @@ SYSTEMD = DEPLOY / "systemd"
 SERVICES_MD = (REPO / "contracts" / "services.md").read_text(encoding="utf-8")
 
 PI_SERVICES = sorted(_services_md_pi_services())
+# Services that never write audit records: the kiosk (a browser), and the backup (no socket, no network; ADR 0002).
+NON_AUDIT = {"atlas-kiosk", "atlas-backup"}
+# Root helper units that belong to a service but are not service users (services.md section 1, atlas-backup row).
+HELPER_UNITS = ["atlas-backup-mount"]
 
 
 # --- parsing services.md -----------------------------------------------------------------------------
@@ -122,8 +126,8 @@ def unit(name: str) -> Unit:
 
 
 def test_one_unit_per_pi_service_and_no_strays() -> None:
-    assert len(PI_SERVICES) == 14
-    assert sorted(p.stem for p in SYSTEMD.glob("*.service")) == PI_SERVICES
+    assert len(PI_SERVICES) == 15
+    assert sorted(p.stem for p in SYSTEMD.glob("*.service")) == sorted(PI_SERVICES + HELPER_UNITS)
 
 
 def test_services_conf_lists_exactly_the_pi_services() -> None:
@@ -144,7 +148,7 @@ def test_user_group_and_state_directory(name: str) -> None:
     assert u.one("DynamicUser") == "no"
     assert u.one("StateDirectory") == f"atlas/{name.removeprefix('atlas-')}"
     assert u.one("StateDirectoryMode") == "0700"
-    assert name in ACTORS or name == "atlas-kiosk"
+    assert (name in ACTORS) != (name in NON_AUDIT)
 
 
 # Who may deviate from which baseline directive (services.md section 5 comments + the documented needs of each service).
@@ -225,7 +229,7 @@ def test_network_scope(name: str) -> None:
     if name == "atlas-egress":
         assert allow == {"any"}
         assert u.relaxed("IPAddressAllow")
-    elif name == "atlas-research":
+    elif name in ("atlas-research", "atlas-backup"):
         assert u.one("PrivateNetwork") == "yes"
         assert not allow and not inet
     elif inet:
@@ -294,7 +298,11 @@ def test_code_runs_through_the_current_symlink(name: str) -> None:
 def test_hardening_extras_and_no_secrets_in_units(name: str) -> None:
     u = unit(name)
     caps = md_capabilities()
-    assert caps == {"atlas-audit": "CAP_LINUX_IMMUTABLE", "atlas-ui": "CAP_NET_BIND_SERVICE"}  # table was parsed
+    assert caps == {  # table was parsed
+        "atlas-audit": "CAP_LINUX_IMMUTABLE",
+        "atlas-ui": "CAP_NET_BIND_SERVICE",
+        "atlas-backup": "CAP_DAC_READ_SEARCH",
+    }
     assert u.one("CapabilityBoundingSet") == caps.get(name, "")
     assert u.one("AmbientCapabilities") == (caps.get(name) or None)
     assert u.one("UMask") == "0077"
@@ -315,6 +323,67 @@ def test_audit_unit_specifics() -> None:
     assert u.one("Restart") == "always"
 
 
+def test_backup_unit_specifics() -> None:
+    """ADR 0002: oneshot from a timer, root only to mount and unmount, writes only the drive and its state directory."""
+    u = unit("atlas-backup")
+    assert u.one("Type") == "oneshot"
+    assert u.one("ExecStart") == "/var/lib/atlas/current/venv/atlas-backup/bin/python -m atlas.backup run"
+    assert "atlas-backup-mount.service" in u.words("Requires", "Unit")
+    assert "atlas-backup-mount.service" in u.words("After", "Unit")
+    assert u.values("ReadWritePaths") == ["/mnt/atlas-backup"]
+    assert u.one("Restart") is None
+    assert not u.values("SupplementaryGroups")
+    assert not u.values("WantedBy", "Install"), "started by atlas-backup.timer, not at boot"
+    assert "atlas-audit.socket" not in u.words("Requires", "Unit")
+    # A '+' or '!' line runs outside the sandbox: no service unit has one (root work goes in a helper unit).
+    for name in PI_SERVICES:
+        for key in ("ExecStart", "ExecStartPre", "ExecStartPost", "ExecCondition", "ExecStop", "ExecStopPost"):
+            plus = [v for v in unit(name).values(key) if v.lstrip("-@:").startswith(("+", "!"))]
+            assert not plus, f"{name} {key} runs privileged"
+
+
+def test_backup_mount_helper_unit() -> None:
+    """Root, host mount namespace (no namespacing options), mounted only while atlas-backup runs."""
+    u = unit("atlas-backup-mount")
+    assert u.one("User") is None, "runs as root: it mounts"
+    assert (u.one("Type"), u.one("RemainAfterExit")) == ("oneshot", "yes")
+    assert u.one("StopWhenUnneeded", "Unit") == "yes"
+    assert u.one("ExecStart") == "/usr/local/sbin/atlas-backup-mount mount"
+    assert u.one("ExecStop") == "/usr/local/sbin/atlas-backup-mount unmount"
+    assert u.one("RuntimeDirectory") == "atlas-backup-mount"
+    namespacing = {
+        "ProtectSystem", "ProtectHome", "PrivateTmp", "PrivateDevices", "PrivateMounts", "ReadWritePaths",
+        "ReadOnlyPaths", "InaccessiblePaths", "TemporaryFileSystem", "BindPaths", "BindReadOnlyPaths", "RootDirectory",
+        "MountAPIVFS", "ProtectKernelTunables", "ProtectKernelModules", "ProtectControlGroups", "ProtectProc",
+        "StateDirectory", "DynamicUser", "PrivateNetwork",  # PrivateNetwork: own mount namespace on systemd 257
+    }  # fmt: skip
+    present = {k for s, k, _ in u.entries if s == "Service"} & namespacing
+    assert not present, f"would hide the mount in a private namespace: {present}"
+    assert u.one("IPAddressDeny") == "any" and u.one("NoNewPrivileges") == "yes"
+    assert not u.values("WantedBy", "Install") and not u.values("Install", "Install")
+
+
+def test_backup_timer() -> None:
+    timer = Unit(SYSTEMD / "atlas-backup.timer")
+    assert timer.one("OnCalendar", "Timer") == "*-*-* 05:30:00"  # PLAN 2.7
+    assert timer.one("Unit", "Timer") == "atlas-backup.service"
+    assert timer.one("Persistent", "Timer") == "true"
+    assert timer.one("WantedBy", "Install") == "timers.target"
+    assert sorted(p.name for p in SYSTEMD.glob("*.timer")) == ["atlas-backup.timer"]
+
+
+def test_provisioning_installs_backup_pieces_and_gates_the_timer() -> None:
+    script = (DEPLOY / "provisioning" / "provision-pi.sh").read_text()
+    assert '"$deploy_dir"/systemd/*.timer' in script
+    assert 'install_file "$here/atlas-backup-mount.sh" /usr/local/sbin/atlas-backup-mount 755' in script
+    assert "ensure_dir /mnt/atlas-backup 0755 root:root" in script
+    gate = script.split("run systemctl enable --now atlas-backup.timer")[0].rsplit("\nif ", 1)[1]
+    assert "$BACKUP_CONF" in gate and '-f "$BACKUP_CRED"' in gate
+    assert 'write_file "$BACKUP_CONF"' in script.split('if [ -e "$BACKUP_CONF" ]; then')[1].split("fi\n")[0]
+    base_os = (DEPLOY / "provisioning" / "base-os.sh").read_text()
+    assert "restic" in base_os.split("PACKAGES=", 1)[1].split("\n", 1)[0]
+
+
 def test_egress_unit_specifics() -> None:
     u = unit("atlas-egress")
     assert "atlas-audit.socket" in u.words("Requires", "Unit")  # no audit trail, no egress
@@ -328,7 +397,7 @@ MULTI_CONSUMER_GROUPS = {p: g for p, g in md_socket_groups().items() if g.endswi
 
 
 def md_audit_writers() -> set[str]:
-    return set(PI_SERVICES) - {"atlas-kiosk"}
+    return set(PI_SERVICES) - NON_AUDIT
 
 
 def md_core_clients() -> set[str]:
@@ -506,7 +575,8 @@ SCRIPTS = sorted((DEPLOY / "provisioning").glob("*.sh"))
 def test_scripts_exist() -> None:
     assert {p.name for p in SCRIPTS} >= {
         "lib.sh", "provision-pi.sh", "deploy.sh", "atlas-release.sh", "store-credential.sh", "gen-audit-keys.sh",
-        "pt1-egress-check.sh", "exposure-inventory.sh", "fi3-audit-load.sh",
+        "pt1-egress-check.sh", "exposure-inventory.sh", "fi3-audit-load.sh", "atlas-backup-mount.sh",
+        "gen-backup-key.sh",
     }  # fmt: skip
 
 

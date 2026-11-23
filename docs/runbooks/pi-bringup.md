@@ -128,7 +128,7 @@ Update while the Pi still has normal internet access. After provisioning, root c
 
 ```sh
 sudo apt update && sudo apt full-upgrade -y
-sudo apt install -y nftables python3-venv openssl sudo curl overlayroot ethtool
+sudo apt install -y nftables python3-venv openssl sudo curl overlayroot ethtool restic
 sudo reboot
 ```
 

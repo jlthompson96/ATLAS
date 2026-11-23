@@ -25,7 +25,7 @@ FSROOT=""   # prefix for directories apply creates; the tests point it at a thro
 PROC=/proc
 SYS=/sys
 
-PACKAGES="nftables python3-venv openssl sudo curl overlayroot ethtool"
+PACKAGES="nftables python3-venv openssl sudo curl overlayroot ethtool restic"  # restic: the nightly backup (ADR 0002)
 OVERLAY_ARG="overlayroot=tmpfs:recurse=0"
 REBOOT=0
 FAILS=0
@@ -644,6 +644,27 @@ check_boot_secrets() {
   fi
 }
 
+# The nightly backup (ADR 0002), once the owner has listed a drive: the timer is on and the last run succeeded recently.
+check_backup() {
+  local conf="$ETC/atlas/backup.conf" status="$DATA/backup/status" out
+  if ! grep -qE '^[[:space:]]*[A-Za-z0-9-]+[[:space:]]+[0-9a-fA-F-]{36}' "$conf" 2>/dev/null; then
+    note "backup: no drive listed in $conf yet (runbook backup.md)"
+    return 0
+  fi
+  if systemctl is-enabled --quiet atlas-backup.timer 2>/dev/null; then
+    pass "backup: atlas-backup.timer enabled"
+  else
+    fail "backup: atlas-backup.timer not enabled (store the password with gen-backup-key.sh, rerun provision-pi.sh)"
+  fi
+  if [ ! -f "$status" ]; then
+    note "backup: no run yet (the first is at 05:30, or: sudo systemctl start atlas-backup.service)"
+  elif out="$(PYTHONPATH="$DATA/current/backend" python3 -m atlas.backup status --file "$status" 2>&1)"; then
+    pass "backup: $out"
+  else
+    fail "backup: $out (journalctl -u atlas-backup)"
+  fi
+}
+
 check_overlay() {
   local cmdline token found=""
   cmdline="$(cat "$BOOT/cmdline.txt" 2>/dev/null || true)"
@@ -677,6 +698,7 @@ cmd_check() {
   check_sudo "$user"
   check_boot
   check_boot_secrets
+  check_backup
   check_overlay
   if [ "$FAILS" -eq 0 ]; then
     printf 'all checks passed\n'

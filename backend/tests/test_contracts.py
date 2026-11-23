@@ -301,7 +301,8 @@ def _services_md_pi_services() -> set[str]:
 
 def test_audit_actors_match_services_md() -> None:
     actors = set(load_json("audit-record.v1.schema.json")["properties"]["actor"]["enum"])
-    pi_services = _services_md_pi_services() - {"atlas-kiosk"}  # the kiosk never writes audit records
+    # the kiosk and the backup (no socket, no network; ADR 0002) never write audit records
+    pi_services = _services_md_pi_services() - {"atlas-kiosk", "atlas-backup"}
     assert actors == pi_services
 
 

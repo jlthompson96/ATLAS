@@ -73,6 +73,19 @@ Not done in the VM: segment rotation and sealing (`+i`, needs a day or size roll
 - [x] Run the audit and egress test suites under **Python 3.13** (the target); on the Mac they ran under 3.15, so a 3.13-only difference (for example in `asyncio`, `ipaddress.is_global`) would not have shown. **VM 2026-11-20:** the full backend suite passes on 3.13.5 (1320 passed, 1 skipped: the HUD build), including the N1–N5 and G1 regression tests. Pi still to do.
 - [ ] Per-caller tunnel-open limit (N3: 2/s, burst 30, `429`) does not trip under honest load: a SearXNG fan-out and a Gmail sync in a busy session; `atlas-egress`'s audit budget (30/s, burst 300) is never hit.
 
+## Backup (ADR 0002, PT-9)
+
+Runbook: [backup.md](backup.md). VM 2026-11-23: all of the following passed with loop-device drives and a mock password, except where marked Pi-only.
+
+- [ ] restic installed from the VM-downloaded `.deb`, its SHA-256 matching the Pi's `apt-cache show restic` (no firewall change).
+- [ ] `gen-backup-key.sh` refuses over SSH and inside tmux; at the console it stores the credential after the key is typed back. (Pi-only: the console.)
+- [ ] Real USB drives: `atlas-backup-mount` finds the listed drive under `/dev/disk/by-uuid`, runs `e2fsck -p`, mounts `nosuid,nodev,noexec,noatime`, and unmounts when the run ends. (Pi-only: real USB, udev timing.)
+- [ ] First run initialises the drive's repository; the next is incremental; `base-os.sh check` shows `backup: ok`.
+- [ ] Both drives plugged in, or neither: the run refuses, and `systemctl --failed` shows `atlas-backup-mount.service`.
+- [ ] `systemd-analyze security atlas-backup.service` about 0.8 (VM: 0.8 SAFE). `CAP_DAC_READ_SEARCH` reads the `chattr +a`/`+i` audit segments and the 0600 credentials.
+- [ ] Card writes during a run: only journal lines (`/proc/diskstats` before and after; restic runs with `--no-cache`).
+- [ ] **PT-9:** restore onto the spare card (runbook "Restore"), fix ownership, deploy, start units; `verify` against the off-box anchors passes and the services start with their credentials.
+
 ## Provisioning and deploy
 
 - [ ] `provision-pi.sh` twice in a row: the second run changes nothing. Real `useradd`, `groupadd`, `install`, `visudo -cf`, `systemd-tmpfiles`.

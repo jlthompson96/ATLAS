@@ -1,0 +1,36 @@
+# atlas-backup-mount.service: mount the allowlisted backup drive for atlas-backup.service, unmount it afterwards.
+# Source of truth: contracts/services.md (atlas-backup row), ADR 0002. Status: Phase 0.
+#
+# A root helper, not a service user: it runs /usr/local/sbin/atlas-backup-mount, which mounts only a drive whose
+# filesystem UUID is listed in /etc/atlas/backup.conf, at /mnt/atlas-backup (nosuid,nodev,noexec).
+#
+# Why a separate unit: the mount has to happen in the host's mount namespace BEFORE atlas-backup.service's sandbox is
+# built, so that its ReadWritePaths=/mnt/atlas-backup covers the drive. An ExecStartPre=+ line in atlas-backup.service
+# runs inside that service's own namespace on systemd 257, and its mount is visible neither to ExecStart nor to the host
+# (checked in the ARM64 VM, 2026-11-23). For the same reason this unit sets NO mount-namespacing option (ProtectSystem,
+# PrivateTmp, PrivateDevices, ReadWritePaths, ...): any of them would hide the mount from everyone else. That includes
+# PrivateNetwork=: on systemd 257 it also gives the unit its own mount namespace (to remount /sys), checked in the VM.
+#
+# atlas-backup.service Requires= this unit; StopWhenUnneeded= stops it (and unmounts) when the backup has finished.
+
+[Unit]
+Description=ATLAS backup: mount the allowlisted backup drive
+StopWhenUnneeded=yes
+After=local-fs.target systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/atlas-backup-mount mount
+ExecStop=/usr/local/sbin/atlas-backup-mount unmount
+# The drive's name (A or B) for atlas-backup's status file; removed when this unit stops.
+RuntimeDirectory=atlas-backup-mount
+RuntimeDirectoryMode=0755
+TimeoutStartSec=15min
+# Hardening that leaves the mount namespace alone (kernel filters, not namespaces).
+NoNewPrivileges=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictRealtime=yes
+LockPersonality=yes
+UMask=0022

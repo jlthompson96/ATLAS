@@ -1,6 +1,6 @@
 # ATLAS services, v1
 
-**Schema revision:** 1.3.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
+**Schema revision:** 1.4.0 · **Sources:** PLAN.md §0.2, §1.2, §2.9–2.16, §5.1–5.3 · Versioning rules: [README.md](README.md)
 
 This file is the single source for service names, Unix users, listeners, secrets and egress allowlists. nftables rules, systemd units, the egress proxy config and the audit `actor` enum are all generated from or checked against it.
 
@@ -24,6 +24,7 @@ Each Pi service runs as its own system user, named the same as the service (`atl
 | `atlas-market` | `atlas-market` | Pi | Quotes, portfolio ledger, encrypted portfolio file | Phase 4 |
 | `atlas-fallback` | `atlas-fallback` | Pi | Pi fallback LLM for intent routing (`PiLocalBackend`), separate process so it can be preempted and memory-capped | Phase 1 (**new in C0**) |
 | `atlas-kiosk` | `atlas-kiosk` | Pi | Chromium kiosk session (loopback only) | Phase 2 |
+| `atlas-backup` | `atlas-backup` | Pi | Nightly encrypted restic backup of config, credentials and service state to a USB drive (ADR 0002). Oneshot unit started by `atlas-backup.timer`; no listener, no network, writes no audit records. Its root helper unit `atlas-backup-mount.service` mounts the allowlisted drive for the run (not a service user) | Phase 0 |
 | `atlas-hostd` | Windows service account (`NT SERVICE\atlas-hostd`) | Desktop | Status, sleep, NVML telemetry, keep-awake leases | Phase 1 |
 | `atlas-hostd-helper` | the signed-in user | Desktop | Per-user activity reporter, started at sign-in | Phase 1 |
 
@@ -111,9 +112,10 @@ Credential names are the `LoadCredentialEncrypted=` IDs. A service can read only
 | `atlas-discord` | `discord-reader-bot-token` |
 | `atlas-executor` | `google-oauth-client`, `google-send-refresh-token` (`gmail.send`), `discord-poster-bot-token` |
 | `atlas-market` | `twelvedata-api-key`. The portfolio key is **not** a credential: it is derived from the passphrase and held in RAM only (D21). |
+| `atlas-backup` | `backup-repo-password` (restic repository password; the owner keeps a paper copy offline) |
 | `atlas-egress`, `atlas-voice`, `atlas-research`, `atlas-search`, `atlas-panels`, `atlas-fallback`, `atlas-kiosk` | none |
 
-The WireGuard private key is owned by root (`systemd-networkd`), not by any ATLAS service. The backup encryption key is printed and stored offline; the nightly backup runs as a root timer that writes only to the backup target over `wg0` or to USB (§2.7).
+The WireGuard private key is owned by root (`systemd-networkd`), not by any ATLAS service. The nightly backup runs as `atlas-backup` from a timer and writes only to a USB drive that root (`atlas-backup-mount.service`) mounts at `/mnt/atlas-backup` for the length of the run (ADR 0002). Its repository password is a credential on the Pi plus a paper copy offline; it never enters a Claude Code session.
 
 ## 5. Per-unit sandbox baseline
 
@@ -141,7 +143,7 @@ RestrictAddressFamilies=AF_UNIX   # see "Address-family relaxations"
 StateDirectory=atlas/<name>   # on the data partition, /var/lib/atlas/<name>
 ```
 
-`atlas-research` adds `PrivateNetwork=yes`. `atlas-voice` and `atlas-fallback` set `MemoryMax=` from the §3.1 budgets.
+`atlas-research` adds `PrivateNetwork=yes`. `atlas-backup` adds `PrivateNetwork=yes` and `ReadWritePaths=/mnt/atlas-backup`; its `StateDirectory` holds only a one-line status file of the last run. `atlas-voice` and `atlas-fallback` set `MemoryMax=` from the §3.1 budgets.
 
 **Address-family relaxations** (the only services that may have IP address families; tests pin this list):
 
@@ -153,7 +155,7 @@ StateDirectory=atlas/<name>   # on the data partition, /var/lib/atlas/<name>
 | `atlas-core` | `AF_INET` | `localhost`, `10.77.0.2` (LM Studio, `atlas-hostd`), the LAN broadcast address (Wake-on-LAN) |
 | `atlas-kiosk` | `AF_INET` | `localhost` (`https://127.0.0.1`) |
 
-**Capabilities:** `atlas-audit` gets `CAP_LINUX_IMMUTABLE` (`chattr +a` on the active segment, `+i` when sealed); `atlas-ui` gets `CAP_NET_BIND_SERVICE`. No other service gets a capability.
+**Capabilities:** `atlas-audit` gets `CAP_LINUX_IMMUTABLE` (`chattr +a` on the active segment, `+i` when sealed); `atlas-ui` gets `CAP_NET_BIND_SERVICE`; `atlas-backup` gets `CAP_DAC_READ_SEARCH` (read every file it backs up, write none). No other service gets a capability.
 
 ## 6. Code location and releases (§7.0, Development environment)
 
