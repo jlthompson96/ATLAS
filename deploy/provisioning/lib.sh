@@ -302,8 +302,12 @@ missing_credentials() {
 }
 
 # --- atlas-ui (Phase 2; contracts/services.md sections 2 and 4) ------------------------------------------------------
+# Used by provision-pi.sh, gen-ui-keys.sh and gen-ui-pin.sh, which source this file.
+# shellcheck disable=SC2034
 UI_TLS_DIR=/etc/atlas/tls # ca.crt and atlas-ui.crt: public; the CA keeps no private key
+# shellcheck disable=SC2034
 UI_CRED_DIR=/var/lib/atlas/credentials/atlas-ui
+# shellcheck disable=SC2034
 UI_CERT_DAYS=800 # Apple accepts at most 825 days for a TLS server certificate
 
 # pi_lan_ip SITE: the Pi's LAN address (`define PI_LAN_IP` in the nftables site file); nothing if unset or still the

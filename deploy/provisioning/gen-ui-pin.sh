@@ -56,6 +56,7 @@ sys.stdout.write(h)'
 hash="$(printf '%s\n' "$pin" | (cd / && runuser -u atlas-ui -- "$py" -I -c "$hasher" "$release"))" ||
   { unset pin; die "hashing the PIN failed"; }
 unset pin
+# shellcheck disable=SC2016  # a literal prefix, not an expansion
 [[ "$hash" == '$argon2id$'* ]] || { unset hash; die "unexpected hash format"; }
 
 if [ -e "$dest" ]; then
