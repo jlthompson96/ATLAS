@@ -291,7 +291,10 @@ class ControlServer:
         if (path is None) == (sock is None):
             raise ValueError("give exactly one of path and sock")
         if sock is not None:
-            self._server = await asyncio.start_unix_server(self._client, sock=sock, limit=MAX_LINE)
+            # systemd owns that socket file: never unlink it on close (Python 3.13 would try to).
+            self._server = await asyncio.start_unix_server(
+                self._client, sock=sock, limit=MAX_LINE, cleanup_socket=False
+            )
         elif path is not None:
             _remove_stale_socket(path)
             old = os.umask(0o117)  # the socket is created 0660: group access is the contract's access control

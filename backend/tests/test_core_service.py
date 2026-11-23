@@ -184,3 +184,31 @@ def test_main_without_a_socket_or_credentials(
     assert "no socket from systemd" in capsys.readouterr().err
     assert service.main(["--socket", str(tmp_path / "x.sock")]) == 2
     assert "CREDENTIALS_DIRECTORY" in capsys.readouterr().err
+
+
+def test_a_socket_from_systemd_is_not_unlinked_on_stop() -> None:
+    """systemd owns /run/atlas/core.sock (atlas-core.socket); a restart must find it still there."""
+
+    async def go() -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as d:
+            path = Path(d) / "core.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(path))
+            listener.listen()
+            listener.setblocking(False)
+            hub = EventHub()
+            control = service.build_control(
+                backend=service.UnlinkedBackend(),
+                hooks=service.UnlinkedHooks(hub),
+                hub=hub,
+                audit=RecordingAuditSink("atlas-core"),
+                signer=service.load_signer(key_dir(Path(d))),
+                peers=SameUserPeers(),
+                executor_socket=Path(d) / "executor.sock",
+                state_dir=Path(d),
+            )
+            await control.start(sock=listener)
+            await control.stop()
+            assert path.exists()
+
+    asyncio.run(go())
