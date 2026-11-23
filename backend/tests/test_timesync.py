@@ -107,8 +107,10 @@ def test_provision_pi_configures_timesync_from_the_firewall_site_file() -> None:
 
 
 def test_every_atlas_service_waits_for_time_sync() -> None:
-    units = sorted((DEPLOY / "systemd").glob("atlas-*.service"))
-    assert len(units) == 14
+    from tests.test_deploy_structure import HELPER_UNITS, PI_SERVICES
+
+    units = sorted(p for p in (DEPLOY / "systemd").glob("atlas-*.service") if p.stem not in HELPER_UNITS)
+    assert [p.stem for p in units] == PI_SERVICES and len(units) == 15
     for unit in units:
         lines = unit.read_text().splitlines()
         section = lines[lines.index("[Unit]") : lines.index("[Service]")]

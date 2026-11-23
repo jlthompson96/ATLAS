@@ -454,10 +454,11 @@ Other compensating controls:
 |---|---|
 | Schedule | Nightly at 05:30, inside the off-hours window, when the host is usually awake for research. |
 | What | config, encrypted credentials, memory DB, task queue, audit segments, and checkpoints |
-| How | Encrypted, deduplicated backup (candidates: restic or borg; ARM64 support to verify in Phase 0). **Backup encryption is mandatory in rev 2:** the source is unencrypted, so the backup key is the only at-rest protection once data leaves the Pi. |
-| Target | A dedicated, firewalled share on the LLM host over wg0, or a USB drive attached to the Pi. A second, rotated USB copy is kept offline. |
+| How | **restic** (decided 2026-11-23, ADR 0002; Debian trixie ships 0.18.0 for arm64). Encrypted, deduplicated. **Backup encryption is mandatory in rev 2:** the source is unencrypted, so the backup key is the only at-rest protection once data leaves the Pi. Runs as `atlas-backup` (read-only to everything but the drive, no network). |
+| Target | **Two USB drives** (decided 2026-11-23): one plugged into the Pi, one offline, swapped monthly. A share on the LLM host over wg0 was the alternative; it would need Phase 1 and a firewall change. |
+| Retention | 14 daily + 4 weekly snapshots. **Backups extend every deletion** ("forget", retention purges, audit crypto-shredding): deleted data stays recoverable for about 5 weeks on the plugged-in drive and about 9 weeks counting the offline one. |
 | Golden image | An OS image after Phase 0. |
-| Backup key | Printed and stored offline. |
+| Backup key | Generated at the Pi's console, written on paper and stored offline; on the Pi as the `atlas-backup` credential. Never typed into a Claude Code session. The backup includes the host key, so a drive plus the paper opens every credential. |
 | Restore drill | Monthly (acceptance test PT-9). |
 
 ### 2.8 LLM serving layer and model fit

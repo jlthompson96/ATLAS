@@ -1,6 +1,6 @@
 # Proposal: `atlas-backup`, the nightly restic backup to USB
 
-**Target:** `contracts/services.md` (v1.3.0), sections 1, 4 and 5. **Bump:** MINOR (new service user, credential and relaxations; nothing existing changes meaning). **Author:** Phase 0 backup work, [ADR 0002](../../docs/adr/0002-backup-restic-usb.md). **Status:** Proposed 2026-11-23.
+**Target:** `contracts/services.md` (v1.3.0), sections 1, 4 and 5. **Bump:** MINOR (new service user, credential and relaxations; nothing existing changes meaning). **Author:** Phase 0 backup work, [ADR 0002](../../docs/adr/0002-backup-restic-usb.md). **Status:** Approved by the owner 2026-11-23, applied in services.md 1.4.0. Amended at implementation: `atlas-backup` keeps the standard `StateDirectory` for a one-line status file of the last run (so `base-os.sh check` can see it; systemd's own record is lost at every reboot under the overlay). Also amended: the drive is mounted by a root helper unit, `atlas-backup-mount.service`, because in the VM an `ExecStartPre=+` mount turned out to be invisible to the sandboxed process and to the host (systemd 257).
 
 ## What
 
@@ -18,7 +18,7 @@
 
 > The WireGuard private key is owned by root (`systemd-networkd`), not by any ATLAS service. The backup runs as `atlas-backup` from a timer and writes only to a USB drive mounted at `/mnt/atlas-backup` for the length of the run (ADR 0002). Its repository password is a credential on the Pi and a paper copy offline; it never enters a Claude Code session.
 
-**§5 Sandbox:** `atlas-backup` adds `PrivateNetwork=yes` (like `atlas-research`), `ReadWritePaths=/mnt/atlas-backup`, and has no `StateDirectory`. Change the capabilities line to:
+**§5 Sandbox:** `atlas-backup` adds `PrivateNetwork=yes` (like `atlas-research`), `ReadWritePaths=/mnt/atlas-backup`; its `StateDirectory` holds only the status file. Change the capabilities line to:
 
 > **Capabilities:** `atlas-audit` gets `CAP_LINUX_IMMUTABLE` (`chattr +a` on the active segment, `+i` when sealed); `atlas-ui` gets `CAP_NET_BIND_SERVICE`; `atlas-backup` gets `CAP_DAC_READ_SEARCH` (read every file it backs up, write none). No other service gets a capability.
 

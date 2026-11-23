@@ -72,7 +72,7 @@ for name in $(service_list "$SERVICES_CONF"); do
 done
 
 log "== systemd units"
-for unit in "$deploy_dir"/systemd/*.service "$deploy_dir"/systemd/*.socket; do
+for unit in "$deploy_dir"/systemd/*.service "$deploy_dir"/systemd/*.socket "$deploy_dir"/systemd/*.timer; do
   install_file "$unit" "/etc/systemd/system/$(basename "$unit")" 644
 done
 install_file "$deploy_dir/systemd/atlas.tmpfiles.conf" /etc/tmpfiles.d/atlas.conf 644
@@ -98,6 +98,22 @@ else
   visudo -cf "$tmp" >/dev/null || die "generated sudoers entry does not validate"
   install -m 440 -o root -g root "$tmp" /etc/sudoers.d/atlas-release
   rm -f "$tmp"
+fi
+
+log "== backup (ADR 0002)"
+# Root-only helper the unit runs as ExecStartPre=+/ExecStopPost=+: mounts the one allowlisted drive, then unmounts it.
+install_file "$here/atlas-backup-mount.sh" /usr/local/sbin/atlas-backup-mount 755
+ensure_dir /mnt/atlas-backup 0755 root:root
+BACKUP_CONF=/etc/atlas/backup.conf
+BACKUP_CRED="$BASE/credentials/atlas-backup/backup-repo-password.cred"
+if [ -e "$BACKUP_CONF" ]; then
+  log "ok      $BACKUP_CONF (the owner's drive list, never overwritten)"
+else
+  write_file "$BACKUP_CONF" 644 "$(printf '%s\n' \
+    "# ATLAS backup drives (ADR 0002, runbook backup.md): one line per drive, '<name> <ext4 filesystem UUID>'." \
+    "# Find the UUID with: sudo blkid -s UUID -o value /dev/sdX1. Unlisted drives are never mounted." \
+    "# A 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0" \
+    "# B 1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d")"
 fi
 
 log "== firewall (nftables)"
@@ -128,5 +144,12 @@ for name in $(enabled_services "$SERVICES_CONF"); do
 done
 enable_args+=(atlas-audit.socket)
 run systemctl enable "${enable_args[@]}"
+# The nightly backup only once there is somewhere to write and a password to write with; until then a timer would
+# only fail every night.
+if grep -qE '^[[:space:]]*[A-Za-z0-9-]+[[:space:]]+[0-9a-fA-F-]{36}' "$BACKUP_CONF" 2>/dev/null && [ -f "$BACKUP_CRED" ]; then
+  run systemctl enable --now atlas-backup.timer
+else
+  log "note    atlas-backup.timer not enabled: needs a drive in $BACKUP_CONF and $BACKUP_CRED (gen-backup-key.sh)"
+fi
 
 log "done. Next: store credentials (store-credential.sh / gen-audit-keys.sh), deploy a release (deploy.sh), start units."
