@@ -10,7 +10,7 @@
 # uncommitted files, tests, virtualenvs or secrets), the HUD built from `git archive HEAD` of frontend/hud (hud/; no
 # Node on the Pi), plus the hash-verified aarch64 wheels for each lock so the Pi installs offline. A new release directory is unpacked beside the others, then the `current` symlink is switched
 # and the enabled units restarted by `atlas-release` on the Pi. The last 3 releases are kept. A failed health check
-# switches back automatically. A deploy that changes no dependency writes about 7 MiB to the microSD; venvs whose lock
+# switches back automatically. A deploy that changes no dependency writes about 10 MiB to the microSD; venvs whose lock
 # changed are rebuilt (known issue R1, PLAN 3.5).
 #
 # Placeholders only: PI_HOST has no default and the placeholder host is refused for a real run.
