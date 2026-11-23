@@ -21,6 +21,12 @@ The owner merged C's branch at `68d3945` before the second fix round. The review
 |---|---|---|---|---|---|
 | P2 | Low | — | the Pi's clock | The Pi 5's RTC has no battery fitted, and with the overlay on, timesyncd's saved clock (`/var/lib/systemd/timesync/clock`) is written to RAM only. After a real power cut, the Pi boots with a stale time until the first NTP sync. Since `0d4d0b5` (verified on the Pi 2026-11-21) every `atlas-*.service` waits for `time-sync.target` and `systemd-time-wait-sync` gives up after 90 s, so ATLAS only starts on a stale clock when the Pi has no internet for those 90 s; the failed wait then shows in `systemctl --failed`. | **Still to do (owner, hardware):** fit the RTC battery, so the clock is right even when the Pi boots offline after a power cut. Software side done: see the step 11 maintenance-window row in `docs/runbooks/pi-bringup.md` Results. |
 
+### From the HUD-on-Pi work (2026-11-23)
+
+| ID | Severity | Blocks | Where | Problem | Agreed fix |
+|---|---|---|---|---|---|
+| R1 | Medium | the 100 MB/day write budget on deploy days | `deploy/provisioning/atlas-release.sh` (`build_venv`) | Every deploy writes a whole new release to the microSD: 107 MB in the ARM64 VM, almost all of it per-service venvs (`atlas-audit`, `atlas-core`, `atlas-executor` about 28 MB each, `atlas-ui` 20 MB; the HUD is 252 KB). One deploy is already more than the PLAN 3.5 budget of 100 MB/day. About 85 MB of it predates the HUD work; `atlas-ui` adds 20 MB. Each venv carries its own copy of pip (~13 MB) and of the same `cryptography` wheel. | Not decided; measure first (window 2026-11-24 step 8 reads `/proc/diskstats` around a deploy). Options: drop pip from each venv after the install; reuse the previous release's venv (hard link, `cp -al`) when that service's lock hasn't changed; don't build venvs for services that aren't enabled. Each is an `atlas-release` change (root code): its own change, with the VM tests. |
+
 ### Accepted (no fix planned)
 
 | ID | Note |
