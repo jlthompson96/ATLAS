@@ -7,6 +7,7 @@
 #   atlas-release rollback                      switch back to the previous release
 #   atlas-release prune                         keep the newest 3 releases (plus current and previous)
 #   atlas-release list
+#   atlas-release locks                         the active release's reusable venvs, as "<service> <lock sha256>"
 #
 # Layout (contracts/services.md section 6): /var/lib/atlas/releases/<version>/{backend,contracts,deploy,hud,venv/<service>},
 # /var/lib/atlas/current -> releases/<version>, /var/lib/atlas/previous -> the release `current` replaced.
@@ -37,14 +38,18 @@ VERSION_RE='^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}$'
 SERVICE_RE='^atlas-[a-z]+$'
 CONF=/etc/atlas/services.conf
 ALLOWED_TOP="backend contracts deploy hud wheels" # hud/: the built HUD, static files only (services.md 1.5.0)
-BUILD_STATE=/var/lib/atlas-build
-BUILD_PRIVATE=/var/lib/private/atlas-build # where DynamicUser= really keeps BUILD_STATE
-MAX_TARBALL_BYTES=$((512 * 1024 * 1024))   # a release is a few MB; bounds the copy out of incoming/
+# Card writes (known issue R1): everything between the upload and the finished release happens in RAM. The tarball
+# copy, the extracted tree and the venv builds live under SCRATCH (tmpfs); the release is written to the card once.
+SCRATCH=/run
+BUILD_RUNTIME=/run/atlas-build           # the unprivileged builder's RuntimeDirectory (tmpfs)
+MIN_SCRATCH_KB=$((300 * 1024))           # a first install (every venv built) needs about 150 MB of RAM
+MAX_TARBALL_BYTES=$((512 * 1024 * 1024)) # a release is a few MB; bounds the copy out of incoming/
 
 # What a failed install must not leave behind (review N5); removed by the EXIT trap that cmd_install sets.
-WORK=""     # root-only (0700) directory under releases/: the tarball copy and the extracted tree
-INPUTS=""   # world-readable build inputs for the unprivileged builder
+WORK=""     # root-only (0700) directory under SCRATCH: the tarball copy and the extracted tree
+INPUTS=""   # world-readable build inputs for the unprivileged builder (under SCRATCH)
 BUILDING="" # service whose venv is being built
+STAGE=""    # root-only hidden directory under releases/: the release being written to the card, renamed when complete
 
 log() { printf '%s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -93,8 +98,9 @@ check_tree_top() {
 
 cleanup_install() {
   if [ -n "$INPUTS" ]; then rm -rf "$INPUTS"; fi
-  if [ -n "$BUILDING" ]; then rm -rf "${BUILD_STATE:?}/$BUILDING" "${BUILD_PRIVATE:?}"; fi
+  if [ -n "$BUILDING" ]; then rm -rf "${BUILD_RUNTIME:?}/$BUILDING"; fi
   if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
+  if [ -n "$STAGE" ]; then rm -rf "$STAGE"; fi
 }
 
 # validate_lock FILE: only pins and hashes. Anything else (pip option lines, URLs, markers) is refused.
@@ -187,24 +193,60 @@ restart_units() {
   done
 }
 
-# build_venv NAME LOCK WHEELS DEST: create the venv and install the locked wheels as an unprivileged user.
+# build_venv NAME LOCK WHEELS DEST: create the venv and install the locked wheels as an unprivileged user, in RAM
+# (RuntimeDirectory, tmpfs). pip itself is removed afterwards: the services never need it, and it is ~13 MB a venv.
 build_venv() {
   local name="$1" lock="$2" wheels="$3" dest="$4"
   command -v systemd-run >/dev/null || die "systemd-run is required to build as an unprivileged user"
   BUILDING="$name"
-  rm -rf "${BUILD_STATE:?}/$name"
-  # The single quotes are intended (SC2016): $STATE_DIRECTORY, $1 and $2 expand in the unprivileged inner shell.
+  rm -rf "${BUILD_RUNTIME:?}/$name"
+  # The single quotes are intended (SC2016): $RUNTIME_DIRECTORY, $1 and $2 expand in the unprivileged inner shell.
   # shellcheck disable=SC2016
   systemd-run --quiet --pipe --wait --collect \
-    -p DynamicUser=yes -p StateDirectory="atlas-build/$name" -p PrivateTmp=yes -p PrivateNetwork=yes \
-    -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes \
-    /bin/sh -c 'set -eu; v="$STATE_DIRECTORY/venv"; /usr/bin/python3 -I -m venv "$v"
+    -p DynamicUser=yes -p RuntimeDirectory="atlas-build/$name" -p RuntimeDirectoryPreserve=yes \
+    -p PrivateTmp=yes -p PrivateNetwork=yes -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes \
+    /bin/sh -c 'set -eu; v="$RUNTIME_DIRECTORY/venv"; /usr/bin/python3 -I -m venv "$v"
       "$v/bin/python" -I -m pip --isolated install --quiet --no-cache-dir --no-index --find-links "$1" \
-        --require-hashes --only-binary=:all: --no-deps -r "$2"' sh "$wheels" "$lock" \
+        --require-hashes --only-binary=:all: --no-deps -r "$2"
+      "$v/bin/python" -I -m pip --isolated uninstall --quiet --yes pip' sh "$wheels" "$lock" \
     || die "building the venv for $name failed"
-  cp -a --no-preserve=ownership "$BUILD_STATE/$name/venv" "$dest"
-  rm -rf "${BUILD_STATE:?}/$name" "${BUILD_PRIVATE:?}"
+  cp -a --no-preserve=ownership "$BUILD_RUNTIME/$name/venv" "$dest"
+  rm -rf "${BUILD_RUNTIME:?}/$name"
   BUILDING=""
+}
+
+# active_release: the active release's directory, resolved once (so a check and a copy see the same release), or nothing.
+active_release() {
+  if [ -L "$BASE/current" ]; then
+    readlink -f "$BASE/current"
+  fi
+}
+
+# reusable_venv NAME RELEASE: RELEASE's venv for NAME can be reused: it was built by this tool from a lock (no pip left
+# in it, so venvs from before R1 are rebuilt once) for the python3 that runs now. RELEASE is the root-owned active
+# release, never anything from the tarball.
+reusable_venv() {
+  local short="${1#atlas-}" cur="$2" venv want
+  venv="$cur/venv/$1"
+  [ -n "$cur" ] && [ -f "$cur/backend/requirements-$short.lock" ] || return 1
+  [ -d "$venv" ] && [ ! -L "$venv" ] && [ -f "$venv/pyvenv.cfg" ] || return 1
+  [ ! -e "$venv/bin/pip" ] || return 1
+  want="$(python3 -I -c 'import platform; print(platform.python_version())' 2>/dev/null)" || return 1
+  [ -n "$want" ] && [ "$(sed -n 's/^version = //p' "$venv/pyvenv.cfg")" = "$want" ]
+}
+
+# cmd_locks: "<service-short-name> <sha256>" for each reusable venv of the active release. deploy.sh leaves those
+# services' wheels out of the tarball; install reuses the venv only if the new lock is byte-identical, and otherwise
+# refuses for lack of wheels (the active release changed in between: deploy again). Read-only.
+cmd_locks() {
+  local name short active
+  active="$(active_release)"
+  for name in $(service_names); do
+    short="${name#atlas-}"
+    if reusable_venv "$name" "$active"; then
+      printf '%s %s\n' "$short" "$(sha256sum <"$active/backend/requirements-$short.lock" | cut -d' ' -f1)"
+    fi
+  done
 }
 
 cmd_install() {
@@ -220,7 +262,10 @@ cmd_install() {
   # From here on, only a private copy is read (review N5): the admin could swap the file in incoming/ between steps.
   trap cleanup_install EXIT
   trap 'exit 1' HUP INT TERM
-  WORK="$(mktemp -d "$BASE/releases/.work.XXXXXX")" # 0700, root-owned, hidden from release_versions
+  local avail
+  avail="$(df -Pk "$SCRATCH" | awk 'NR == 2 { print $4 }')"
+  [ "${avail:-0}" -ge "$MIN_SCRATCH_KB" ] || die "less than $((MIN_SCRATCH_KB / 1024)) MB free in $SCRATCH (RAM) to build the release"
+  WORK="$(mktemp -d "$SCRATCH/atlas-release.XXXXXX")" # 0700, root-owned, in RAM
   tarball="$WORK/release.tar"
   partial="$WORK/tree"
   head -c "$((MAX_TARBALL_BYTES + 1))" <"$incoming" >"$tarball"
@@ -241,15 +286,21 @@ cmd_install() {
 
   # One venv per service, from the root-owned service list. Dependencies only from shipped, hash-checked wheels.
   install -d -m 700 "$partial/venv"
-  local name short lock
+  local name short lock reuse=() active
+  active="$(active_release)"
   for name in $(service_names); do
     short="${name#atlas-}"
     lock="$partial/backend/requirements-$short.lock"
     if [ -f "$lock" ]; then
       validate_lock "$lock"
-      [ -d "$partial/wheels/$short" ] || die "no wheels for $name"
+      if reusable_venv "$name" "$active" && cmp -s "$lock" "$active/backend/requirements-$short.lock"; then
+        log "reuse   venv/$name (lock unchanged: hard links to the active release)"
+        reuse+=("$name")
+        continue
+      fi
+      [ -d "$partial/wheels/$short" ] || die "no wheels for $name (if the active release changed since deploy.sh asked: deploy again)"
       # The unprivileged builder must be able to read its inputs; the release tree itself stays 0700 root.
-      INPUTS="$(mktemp -d "$BASE/releases/.in.XXXXXX")"
+      INPUTS="$(mktemp -d "$SCRATCH/atlas-release-in.XXXXXX")"
       cp -R "$partial/wheels/$short" "$INPUTS/wheels"
       cp "$lock" "$INPUTS/lock"
       chmod -R a+rX "$INPUTS"
@@ -267,9 +318,19 @@ cmd_install() {
   find "$partial" -perm /6000 -exec chmod ug-s {} +
   chmod -R u=rwX,go=rX "$partial"
   [ -z "$(find "$partial" -perm /6000 -print -quit)" ] || die "setuid or setgid bit survived"
-  mv "$partial" "$dest"
+  # The one write to the card: a hidden root-only directory beside the releases, then an atomic rename. Reused venvs
+  # are hard links into the active release (no data written); both are root-owned and read-only to every service.
+  STAGE="$(mktemp -d "$BASE/releases/.inst.XXXXXX")" # 0700, hidden from release_versions
+  cp -a "$partial/." "$STAGE/"
   rm -rf "$WORK"
   WORK=""
+  for name in ${reuse[@]+"${reuse[@]}"}; do
+    cp -al "$active/venv/$name" "$STAGE/venv/$name"
+  done
+  chmod 755 "$STAGE"
+  [ -z "$(find "$STAGE" -perm /6000 -print -quit)" ] || die "setuid or setgid bit survived"
+  mv -T "$STAGE" "$dest"
+  STAGE=""
   trap - EXIT HUP INT TERM
   rm -f "$incoming"
   log "installed $version"
@@ -354,7 +415,8 @@ main() {
     rollback) cmd_rollback ;;
     prune) cmd_prune ;;
     list) cmd_list ;;
-    *) sed -n '2,12p' "$0"; exit 2 ;;
+    locks) cmd_locks ;;
+    *) sed -n '2,13p' "$0"; exit 2 ;;
   esac
 }
 

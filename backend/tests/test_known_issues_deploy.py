@@ -85,6 +85,7 @@ def stage(tmp_path: Path, members: dict[str, Any]) -> tuple[Path, str]:
     base = tmp_path / "base"
     (base / "incoming").mkdir(parents=True)
     (base / "releases").mkdir()
+    (tmp_path / "scratch").mkdir()
     (tmp_path / "services.conf").write_text("atlas-audit yes\n")
     tarball = make_tar(base / "incoming" / f"{V}.tar", members)
     return base, hashlib.sha256(tarball.read_bytes()).hexdigest()
@@ -95,8 +96,8 @@ def install(tmp_path: Path, sha: str, extra: str = "") -> subprocess.CompletedPr
     return bash(
         f"""
 BASE="{base}"; CONF="{tmp_path / "services.conf"}"
-BUILD_STATE="{tmp_path / "build"}"; BUILD_PRIVATE="{tmp_path / "private"}"
-python3() {{ :; }}  # no CPython 3.13 check, venv or compileall here: not what these tests are about
+SCRATCH="{tmp_path / "scratch"}"; BUILD_RUNTIME="{tmp_path / "build"}"; MIN_SCRATCH_KB=1
+python3() {{ case "$*" in *platform*) echo 3.13.5 ;; esac; }}  # no 3.13 check, venv or compileall; a fixed version
 chown() {{ :; }}    # an unprivileged run
 {extra}
 cmd_install "{V}" "{sha}"
@@ -144,7 +145,8 @@ def test_n5_every_failure_path_cleans_up(tmp_path: Path, failure: str) -> None:
     base, sha = stage(tmp_path, members)
     result = install(tmp_path, "0" * 64 if failure == "checksum" else sha, extra)
     assert result.returncode != 0
-    assert list((base / "releases").iterdir()) == []  # no .work.*, no world-readable .in.*, no partial tree
+    assert list((base / "releases").iterdir()) == []  # no .inst.*, no partial tree on the card
+    assert list((tmp_path / "scratch").iterdir()) == []  # nothing left in RAM either: no work dir, no build inputs
     assert (base / "incoming" / f"{V}.tar").is_file()  # the upload stays for a retry
     assert not (tmp_path / "build" / "atlas-audit").exists()
 
@@ -345,3 +347,91 @@ def test_d1_the_wireguard_mark_is_documented_with_the_networkd_key() -> None:
     assert wrong == []  # wg-quick syntax: networkd ignores it, the mark rule never matches, the tunnel is blocked
     for path in (DEPLOY / "nftables" / "site.nft.example", REPO / "docs" / "runbooks" / "provisioning.md"):
         assert "FirewallMark=0x5182" in path.read_text(), path.name
+
+
+# --- R1: a deploy writes the release to the card once, and reuses unchanged venvs ---------------------------------------
+
+OLD = "20261119T120000Z-0123456"
+
+
+def active_release(
+    tmp_path: Path, base: Path, *, lock: bytes = LOCK, pip: bool = False, version: str = "3.13.5"
+) -> Path:
+    """An installed, active release with a venv for atlas-audit built from ``lock``."""
+    old = base / "releases" / OLD
+    (old / "backend").mkdir(parents=True)
+    (old / "backend" / "requirements-audit.lock").write_bytes(lock)
+    venv = old / "venv" / "atlas-audit"
+    (venv / "lib").mkdir(parents=True)
+    (venv / "bin").mkdir()
+    (venv / "pyvenv.cfg").write_text(f"home = /usr/bin\nversion = {version}\n")
+    (venv / "lib" / "cryptography.so").write_bytes(b"x" * 4096)
+    if pip:
+        (venv / "bin" / "pip").write_text("#!/bin/sh\n")
+    (base / "current").symlink_to(f"releases/{OLD}")
+    return venv
+
+
+@needs_gnu_tar
+def test_r1_an_unchanged_lock_reuses_the_venv_as_hard_links_without_wheels(tmp_path: Path) -> None:
+    base, sha = stage(tmp_path, {**CLEAN, "backend/requirements-audit.lock": LOCK})  # no wheels in the tarball
+    old = active_release(tmp_path, base)
+    result = install(tmp_path, sha, "systemd-run() { echo BUILT >&2; return 1; }")
+    assert result.returncode == 0, result.stderr
+    assert "reuse   venv/atlas-audit" in result.stderr and "BUILT" not in result.stderr
+    new = base / "releases" / V / "venv" / "atlas-audit" / "lib" / "cryptography.so"
+    assert new.stat().st_ino == (old / "lib" / "cryptography.so").stat().st_ino  # a hard link: nothing written
+    assert sorted(p.name for p in (base / "releases").iterdir()) == [OLD, V]  # no .inst.* left
+    assert list((tmp_path / "scratch").iterdir()) == []
+
+
+@pytest.mark.parametrize("why", ["lock", "pip", "python", "no-current"])
+@needs_gnu_tar
+def test_r1_anything_but_an_exact_match_needs_wheels(tmp_path: Path, why: str) -> None:
+    base, sha = stage(tmp_path, {**CLEAN, "backend/requirements-audit.lock": LOCK})
+    if why != "no-current":
+        other = LOCK.replace(b"2.1.1", b"2.1.0") if why == "lock" else LOCK
+        active_release(tmp_path, base, lock=other, pip=why == "pip", version="3.13.4" if why == "python" else "3.13.5")
+    result = install(tmp_path, sha)
+    assert result.returncode != 0
+    assert "no wheels for atlas-audit" in result.stderr
+    assert [p.name for p in (base / "releases").iterdir() if p.name != OLD] == []
+
+
+@needs_gnu_tar
+def test_r1_venvs_are_built_in_ram_and_lose_pip(tmp_path: Path) -> None:
+    members = {**CLEAN, "backend/requirements-audit.lock": LOCK, "wheels/audit/a-1-py3-none-any.whl": b"zip"}
+    base, sha = stage(tmp_path, members)
+    fake_build = f"""
+systemd-run() {{
+  printf '%s\\n' "$@" >"{tmp_path / "args"}"
+  mkdir -p "$BUILD_RUNTIME/atlas-audit/venv/lib" && echo built >"$BUILD_RUNTIME/atlas-audit/venv/lib/x"
+}}
+"""
+    result = install(tmp_path, sha, fake_build)
+    assert result.returncode == 0, result.stderr
+    args = (tmp_path / "args").read_text()
+    assert "RuntimeDirectory=atlas-build/atlas-audit" in args and "StateDirectory" not in args
+    assert "pip --isolated uninstall --quiet --yes pip" in args
+    assert (base / "releases" / V / "venv" / "atlas-audit" / "lib" / "x").read_text() == "built\n"
+    assert not (tmp_path / "build" / "atlas-audit").exists()
+    assert list((tmp_path / "scratch").iterdir()) == []
+
+
+def test_r1_locks_lists_only_reusable_venvs(tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    (base / "releases").mkdir(parents=True)
+    (tmp_path / "services.conf").write_text("atlas-audit yes\natlas-core yes\n")
+    active_release(tmp_path, base)
+    snippet = f'BASE="{base}"; CONF="{tmp_path / "services.conf"}"; python3() {{ echo 3.13.5; }}; cmd_locks'
+    result = bash(snippet)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"audit {hashlib.sha256(LOCK).hexdigest()}\n"  # atlas-core has no venv there: not listed
+    empty = bash(f'BASE="{tmp_path / "none"}"; CONF="{tmp_path / "services.conf"}"; cmd_locks')
+    assert empty.returncode == 0 and empty.stdout == ""
+
+
+def test_r1_deploy_leaves_out_only_wheels_the_pi_reported() -> None:
+    text = (DEPLOY / "provisioning" / "deploy.sh").read_text()
+    assert "\"${release_cmd[@]}\" locks 2>/dev/null | grep -E '^[a-z]+ [0-9a-f]{64}$'" in text
+    assert 'grep -qx "$short $(shasum -a 256 "$lock" | cut -d\' \' -f1)"' in text
