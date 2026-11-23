@@ -15,7 +15,7 @@ import pytest
 
 from atlas.core.service import EXECUTOR_SOCKET, STATE_DIR
 from atlas.llm.lmstudio import CredentialError, read_token_file
-from atlas.ui_server.config import UiConfig
+from atlas.ui_server.config import ConfigError, UiConfig, load_config
 
 REPO = Path(__file__).resolve().parents[2]
 PROV = REPO / "deploy" / "provisioning"
@@ -136,7 +136,9 @@ def test_gen_ui_pin_needs_the_console_and_hashes_as_atlas_ui() -> None:
     t = text("gen-ui-pin.sh")
     assert "\nneed_local_console\n" in t
     assert t.count("read -rsp") == 2  # typed twice, never echoed
-    assert 'runuser -u atlas-ui -- "$py" -I -c "$hasher" "$release"' in t  # never root running release code
+    # release code runs as atlas-ui in a sandbox, on pipes only: never root, never this terminal
+    assert 'hash="$(printf \'%s\\n\' "$pin" | ui_python "$py" -I -c "$hasher" "$release" 2>&1)"' in t
+    assert "runuser" not in t
     assert 'printf \'%s\' "$hash" | "$here/store-credential.sh" atlas-ui stepup-pin-hash' in t
     assert 'echo "$pin' not in t and 'echo "$hash' not in t and "logger" not in t and "| tee" not in t
     env = {"PATH": "/usr/bin:/bin", "DRY_RUN": "1"}
@@ -179,3 +181,54 @@ def test_release_accepts_hud_and_services_md_documents_it() -> None:
     services = (REPO / "contracts" / "services.md").read_text()
     assert "A release holds `backend/`, `contracts/`, `deploy/`, `venv/<service>/` and `hud/`" in services
     assert "keeps **no private key**" in services
+
+
+def test_ui_devices_runs_sandboxed_on_pipes_and_pair_refuses_tmux() -> None:
+    t = text("ui-devices.sh")
+    assert 'ui_python -p ReadWritePaths=/var/lib/atlas/ui "$py" -I -c "$cli"' in t
+    assert "</dev/null 2>&1 | cat" in t and "runuser" not in t
+    assert '[ "${args[0]}" = pair ] && in_shared_terminal' in t
+
+
+def test_ui_python_sandbox_mirrors_the_unit() -> None:
+    lib = text("lib.sh")
+    body = lib.split("ui_python() {", 1)[1].split("\n}\n", 1)[0]
+    assert "--uid=atlas-ui --gid=atlas-ui" in body and "--pipe --wait" in body
+    unit = (SYSTEMD / "atlas-ui.service").read_text()
+    for prop in ("NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes",
+                 "MemoryDenyWriteExecute=yes", "SystemCallFilter=@system-service", "ProtectProc=invisible", "UMask=0077",
+                 "RestrictNamespaces=yes", "LockPersonality=yes"):  # fmt: skip
+        assert f"\n{prop}\n" in unit and f"-p {prop}" in body, prop
+    assert "-p PrivateNetwork=yes" in body and "-p CapabilityBoundingSet= " in body
+
+
+def test_renewal_keeps_the_old_key_until_the_new_one_is_ready() -> None:
+    t = text("gen-ui-keys.sh")
+    assert (
+        t.index("openssl verify -CAfile")
+        < t.index('rm -f "$key_cred"')
+        < t.index('store-credential.sh" atlas-ui tls-key')
+    )
+    assert "NTPSynchronized" in t
+
+
+def test_pi_lan_ip_refuses_addresses_that_are_not_a_lan_host(tmp_path: Path) -> None:
+    site = tmp_path / "site.nft"
+    for bad in ("0.0.0.0", "127.0.0.1", "169.254.1.2", "255.255.255.255"):  # noqa: S104  (refused values)
+        site.write_text(f"define PI_LAN_IP = {bad}\n")
+        r = bash('pi_lan_ip "$1"', str(site))
+        assert r.returncode == 1 and "Pi's own LAN address" in r.stderr, bad
+
+
+def test_atlas_ui_refuses_to_listen_on_every_address(tmp_path: Path) -> None:
+    for name in ("device-token-key", "stepup-pin-hash"):
+        (tmp_path / name).write_text("x")
+    for host, message in (("", "must be an IP address"), ("0.0.0.0", "every address"), ("::", "every address"),  # noqa: S104
+                          ("atlas.lan", "must be an IP address")):  # fmt: skip
+        with pytest.raises(ConfigError, match=message):
+            load_config(credentials=tmp_path, tls_cert=tmp_path / "c", hosts=("127.0.0.1", host))
+    assert load_config(credentials=tmp_path, tls_cert=tmp_path / "c", hosts=("127.0.0.1", "10.0.0.48")).hosts
+
+
+def test_deploy_builds_the_hud_in_a_clean_environment() -> None:
+    assert 'env -i PATH="$PATH" HOME="$HOME" npm run -s build' in text("deploy.sh")

@@ -268,17 +268,44 @@ enabled_services() {
 
 # --- consoles, overlay and credentials ------------------------------------------------------------------------------
 
-# need_local_console: refuse unless stdin and stdout are the Pi's own virtual console (/dev/ttyN), outside tmux or screen.
-# For secrets a person chooses or must write down (backup password, approval PIN): a Claude Code session can read a
-# tmux pane, and SSH sessions can be logged.
+# ancestor_comms: the command names of this script's ancestor processes, one per line, read from /proc (never from the
+# environment, which sudo resets: $TMUX and $STY are gone under sudo).
+ancestor_comms() {
+  local pid=$$ stat ppid
+  while [ "$pid" -gt 1 ]; do
+    cat "/proc/$pid/comm" 2>/dev/null || return 0
+    stat="$(cat "/proc/$pid/stat" 2>/dev/null)" || return 0
+    read -r _ ppid _ <<<"${stat##*) }" # after the "(comm)" field, which may contain spaces ("tmux: server")
+    pid="$ppid"
+  done
+}
+
+# in_shared_terminal: true under tmux or screen, whose panes can be read from another session (Claude Code reads the
+# shared tmux pane on the Pi).
+in_shared_terminal() {
+  ancestor_comms | grep -qE '^(tmux|screen)'
+}
+
+# need_local_console: refuse unless this runs at the Pi's own keyboard and screen. For secrets a person chooses or must
+# write down (backup password, approval PIN): a Claude Code session can read a tmux pane, and SSH sessions can be logged.
+# Checked through what the kernel and logind report, because under sudo (use_pty) `tty` names sudo's own pty and the
+# environment is reset (security review of feat/ui-on-pi, item 1):
+#  - stdin and stdout are the same terminal (no redirection, no pipes);
+#  - no tmux, screen or sshd among the ancestor processes;
+#  - the login session (systemd's session-N.scope, which sudo keeps) is local, on a virtual console: TTY=ttyN, Remote=no.
 need_local_console() {
-  local console
-  console="$(tty 2>/dev/null || true)"
-  [[ "$console" =~ ^/dev/tty[0-9]+$ ]] || die "run this on the Pi's own console (got '${console:-no terminal}'), not over SSH or in tmux"
-  [ "$(readlink -f /proc/self/fd/1)" = "$console" ] || die "stdout must be the console too (no redirection or pipes)"
-  if [ -n "${TMUX:-}" ] || [ -n "${STY:-}" ]; then
-    die "inside tmux or screen: the pane can be read from elsewhere"
+  local session props
+  if ! { [ -t 0 ] && [ -t 1 ] && [ "/proc/$$/fd/0" -ef "/proc/$$/fd/1" ]; }; then
+    die "run this on the Pi's own console: stdin and stdout must be the terminal (no redirection or pipes)"
   fi
+  if ancestor_comms | grep -qE '^(tmux|screen|sshd)'; then
+    die "run this on the Pi's own console, not over SSH or in tmux or screen (their screens can be read from elsewhere)"
+  fi
+  session="$(sed -n 's#.*/session-\([^/]*\)\.scope$#\1#p' /proc/self/cgroup | head -1)"
+  [ -n "$session" ] || die "run this on the Pi's own console: this process is not in a login session"
+  props="$(loginctl show-session "$session" -p Remote -p TTY 2>/dev/null | sort | tr '\n' ' ')"
+  [[ "$props" =~ ^Remote=no\ TTY=tty[0-9]+\ $ ]] ||
+    die "run this on the Pi's own console (this login session: ${props:-unknown}), not over SSH or in tmux"
 }
 
 # root_is_overlay: true while the read-only root overlay is on; anything written to /etc then vanishes at the next boot.
@@ -311,6 +338,21 @@ UI_CRED_DIR=/var/lib/atlas/credentials/atlas-ui
 # shellcheck disable=SC2034
 UI_CERT_DAYS=800 # Apple accepts at most 825 days for a TLS server certificate
 
+# ui_python ARGS...: run the active release's atlas-ui Python as atlas-ui in a sandbox like atlas-ui.service's, never as
+# root and never on the caller's terminal (review item 2): the caller must give it pipes or files for stdin, stdout and
+# stderr, so release code can't push keystrokes into an admin's shell (TIOCSTI) or outlive the command. Extra -p
+# properties (ReadWritePaths=) go first.
+ui_python() {
+  systemd-run --quiet --pipe --wait --collect --uid=atlas-ui --gid=atlas-ui \
+    -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes -p PrivateDevices=yes \
+    -p PrivateNetwork=yes -p RestrictAddressFamilies=AF_UNIX -p ProtectKernelTunables=yes -p ProtectKernelModules=yes \
+    -p ProtectKernelLogs=yes -p ProtectControlGroups=yes -p ProtectClock=yes -p ProtectHostname=yes \
+    -p RestrictNamespaces=yes -p RestrictSUIDSGID=yes -p RestrictRealtime=yes -p LockPersonality=yes \
+    -p MemoryDenyWriteExecute=yes -p SystemCallFilter=@system-service -p SystemCallArchitectures=native \
+    -p CapabilityBoundingSet= -p ProtectProc=invisible -p ProcSubset=pid -p UMask=0077 -p WorkingDirectory=/ \
+    -p RuntimeMaxSec=60 "$@"
+}
+
 # pi_lan_ip SITE: the Pi's LAN address (`define PI_LAN_IP` in the nftables site file); nothing if unset or still the
 # documentation placeholder. atlas-ui binds it and its certificate names it.
 pi_lan_ip() {
@@ -318,6 +360,7 @@ pi_lan_ip() {
   ip="$(site_define PI_LAN_IP "$1")"
   case "$ip" in
     '' | 192.0.2.*) return 0 ;;
+    0.* | 127.* | 169.254.* | 224.* | 255.*) die "$1: PI_LAN_IP must be the Pi's own LAN address, not $ip" ;;
   esac
   [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "$1: PI_LAN_IP must be a plain IPv4 address"
   printf '%s\n' "$ip"

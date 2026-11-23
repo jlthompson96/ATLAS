@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,6 +71,13 @@ def load_config(
     hosts: tuple[str, ...] = ("127.0.0.1",),
     extra_origins: tuple[str, ...] = (),
 ) -> UiConfig:
+    for host in hosts:
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            raise ConfigError(f"--host must be an IP address, got {host!r}") from None
+        if addr.is_unspecified:  # services.md section 2: the LAN address and loopback, never every address
+            raise ConfigError(f"--host {host} would listen on every address; give the Pi's LAN address")
     defaults = UiConfig(port, tls_cert, credentials / TLS_KEY_CRED, b"", "")
     return UiConfig(
         port=port,

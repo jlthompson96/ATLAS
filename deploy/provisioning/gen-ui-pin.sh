@@ -8,7 +8,8 @@
 # hash can be brute-forced, so the hash is as sensitive as the PIN: it goes straight from the hasher into
 # store-credential.sh through a pipe. The script refuses unless it runs on the Pi's local console, outside tmux.
 # The hash is computed by the active release's atlas-ui code (argon2-cffi lives only in that venv), run as the
-# atlas-ui user, never as root (root runs nothing from a release: atlas-release's threat model).
+# atlas-ui user in a sandbox and on pipes, never as root (root runs nothing from a release: atlas-release's threat
+# model) and never on this terminal.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,19 +46,22 @@ if [ "$pin" != "$again" ]; then
 fi
 unset again
 
+# Hashed by the release's own code (argon2-cffi is only in that venv), as atlas-ui in a sandbox (lib.sh ui_python).
+# Every stream is a pipe: the PIN goes in on stdin, the hash comes back on stdout, and nothing reaches this terminal.
 # -I: isolated (no environment variables, no user site, not the current directory on sys.path).
 # The single quotes are intended (SC2016): this is Python, not shell.
 # shellcheck disable=SC2016
 hasher='import sys; sys.path.insert(0, sys.argv[1] + "/backend")
 from atlas.ui_server.pin import hash_pin
-h = hash_pin(sys.stdin.readline().rstrip("\n"))
-assert h.startswith("$argon2id$")
-sys.stdout.write(h)'
-hash="$(printf '%s\n' "$pin" | (cd / && runuser -u atlas-ui -- "$py" -I -c "$hasher" "$release"))" ||
-  { unset pin; die "hashing the PIN failed"; }
+sys.stdout.write(hash_pin(sys.stdin.readline().rstrip("\n")))'
+hash="$(printf '%s\n' "$pin" | ui_python "$py" -I -c "$hasher" "$release" 2>&1)" || hash=""
 unset pin
+# Exactly one Argon2id PHC string; anything else (an error) is not shown, since it came from release code.
 # shellcheck disable=SC2016  # a literal prefix, not an expansion
-[[ "$hash" == '$argon2id$'* ]] || { unset hash; die "unexpected hash format"; }
+if [[ ! "$hash" =~ ^'$argon2id$'[A-Za-z0-9+/=,\$]+$ ]]; then
+  unset hash
+  die "hashing the PIN failed; nothing changed (does the active release have the atlas-ui venv?)"
+fi
 
 if [ -e "$dest" ]; then
   rm -f "$dest"

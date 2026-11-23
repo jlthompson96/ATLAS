@@ -6,9 +6,9 @@
 #   sudo deploy/provisioning/ui-devices.sh list
 #   sudo deploy/provisioning/ui-devices.sh revoke <device-id>
 #
-# Runs the active release's atlas-ui code as the atlas-ui user (never as root), on atlas-ui's own state files; a running
-# server notices within seconds. A pairing code is short-lived and single use, but it is what lets a browser in: run
-# `pair` yourself and type the code into the browser, rather than pasting it anywhere.
+# Runs the active release's atlas-ui code as the atlas-ui user in a sandbox (never as root), on atlas-ui's own state
+# files; a running server notices within seconds. A pairing code is short-lived and single use, but it is what lets a
+# browser in: `pair` refuses to run inside tmux or screen. Run it yourself and type the code into the browser.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,11 +33,15 @@ release=/var/lib/atlas/current
 py="$release/venv/atlas-ui/bin/python"
 [ -x "$py" ] || die "no atlas-ui venv in the active release: deploy a release first (deploy.sh)"
 
-# -I: isolated (no environment variables, no user site, not the current directory on sys.path).
-# The single quotes are intended (SC2016): this is Python, not shell.
+if [ "${args[0]}" = pair ] && in_shared_terminal; then
+  die "inside tmux or screen: a pairing code is what lets a browser in, and that pane can be read from elsewhere. Run it over your own SSH session or at the console."
+fi
+
+# As atlas-ui in a sandbox (lib.sh ui_python), writing only atlas-ui's state directory; its output comes back through a
+# pipe, never straight onto this terminal. -I: isolated. The single quotes are intended (SC2016): this is Python.
 # shellcheck disable=SC2016
 cli='import sys; sys.path.insert(0, sys.argv[1] + "/backend")
 from atlas.ui_server.__main__ import main
 sys.exit(main(sys.argv[2:]))'
-cd /
-exec runuser -u atlas-ui -- "$py" -I -c "$cli" "$release" "${args[@]}" --state-dir /var/lib/atlas/ui
+ui_python -p ReadWritePaths=/var/lib/atlas/ui "$py" -I -c "$cli" "$release" "${args[@]}" --state-dir /var/lib/atlas/ui \
+  </dev/null 2>&1 | cat

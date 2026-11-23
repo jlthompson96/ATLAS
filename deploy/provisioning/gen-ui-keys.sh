@@ -38,12 +38,12 @@ ip="$(pi_lan_ip "$site")"
 [ -d "$UI_CRED_DIR" ] || die "$UI_CRED_DIR missing: run provision-pi.sh first"
 
 key_cred="$UI_CRED_DIR/tls-key.cred"
-if [ "$renew" = 1 ]; then
-  log "renewing: removing the old certificate and key"
-  rm -f "$key_cred" "$UI_TLS_DIR/atlas-ui.crt" "$UI_TLS_DIR/ca.crt"
-elif [ -e "$key_cred" ]; then
+if [ "$renew" != 1 ] && [ -e "$key_cred" ]; then
   die "$key_cred exists. To make a new CA and certificate: $0 --renew-tls"
 fi
+# The certificate's validity starts now: a stale clock (no RTC battery, known issue P2) would make it "not yet valid".
+[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] ||
+  die "the clock is not synchronized yet (timedatectl): the certificate would carry a wrong start date"
 
 umask 077
 tmp="$(mktemp -d -p /run atlas-ui-tls.XXXXXX)" # tmpfs: the keys never touch the card in the clear
@@ -66,6 +66,11 @@ rm -f "$tmp/ca.key"
 log "the CA's private key is deleted: this CA can sign nothing more"
 openssl verify -CAfile "$tmp/ca.crt" "$tmp/server.crt" >/dev/null || die "the new certificate does not verify"
 
+# Only now, with the new key and certificate ready, the old ones go (review item 4: a failure above leaves them).
+if [ "$renew" = 1 ]; then
+  log "renewing: replacing the old certificate and key"
+  rm -f "$key_cred" "$UI_TLS_DIR/atlas-ui.crt" "$UI_TLS_DIR/ca.crt"
+fi
 "$here/store-credential.sh" atlas-ui tls-key <"$tmp/server.key"
 rm -f "$tmp/server.key"
 install -d -m 0755 -o root -g root "$UI_TLS_DIR"

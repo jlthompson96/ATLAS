@@ -21,5 +21,5 @@ The certificate binds the Pi's LAN address (the owner chose an IP address over a
 ## Who is affected
 
 - `deploy/provisioning/deploy.sh` (builds the HUD from `git archive HEAD` and adds `hud/`), `atlas-release.sh` (allowlist), `docs/runbooks/deploy.md`.
-- A new `deploy/provisioning/gen-ui-tls.sh`; `atlas-ui.service` (reads the certificate from `/etc/atlas/tls/`).
+- A new `deploy/provisioning/gen-ui-keys.sh`; `atlas-ui.service` (reads the certificate from `/etc/atlas/tls/`).
 - Tests that pin the release allowlist.

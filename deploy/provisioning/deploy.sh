@@ -79,7 +79,9 @@ if [ "$DRY_RUN" = "1" ]; then
 else
   command -v npm >/dev/null || die "npm is needed to build the HUD"
   git archive --format=tar HEAD frontend/hud | tar -x -C "$work"
-  (cd "$work/frontend/hud" && npm ci --ignore-scripts --prefer-offline --no-audit --no-fund >/dev/null && npm run -s build >/dev/null) ||
+  # A clean environment: Vite builds any VITE_* variable from the shell into the bundle (review nit).
+  (cd "$work/frontend/hud" && env -i PATH="$PATH" HOME="$HOME" npm ci --ignore-scripts --prefer-offline --no-audit --no-fund >/dev/null &&
+    env -i PATH="$PATH" HOME="$HOME" npm run -s build >/dev/null) ||
     die "building the HUD failed"
   [ -f "$work/frontend/hud/dist/index.html" ] || die "the HUD build produced no index.html"
   cp -R "$work/frontend/hud/dist" "$stage/hud"
