@@ -62,6 +62,31 @@ Dev checks (from `hostd/`, venv built from the shared lock with `--require-hashe
 
 `mypy` is configured with `platform = "win32"` so the ctypes code is type-checked on the Mac.
 
+## Desktop inventory (Phase 0)
+
+`scripts/desktop-inventory.ps1` is read-only and needs nothing installed: it runs in the built-in Windows PowerShell 5.1. It records what Phase 0 and the Wake-on-LAN prerequisites need (PLAN A2, A3, A5, §0.4, §2.13):
+
+- the Windows version and display language
+- CPU, RAM, motherboard and firmware
+- the GPU and its VRAM (`nvidia-smi`)
+- disks
+- the wired NIC and its wake settings
+- the devices allowed to wake the PC
+- `powercfg /a`
+- Fast Startup, hibernate, Windows Update active hours and wake timers
+- Python 3.13, the LM Studio version and WireGuard
+- whether the Pi is on the same layer-2 segment (yes/no)
+
+It leaves out the computer and user names, MAC and IP addresses, serials and UUIDs, because the repository is public.
+
+Copy the script to the desktop, open PowerShell **as administrator** (needed for wake timers and Secure Boot; the rest works without), and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop-inventory.ps1 -PiAddress <the Pi's LAN IP> -OutFile inventory.md
+```
+
+Read `inventory.md` before sharing it (wake timers can name scheduled tasks), then save it as `docs/inventory/desktop-<date>.md`. `-ExecutionPolicy Bypass` covers this one process; the machine's policy doesn't change. The script has only been checked statically (`tests/test_inventory_script.py`: read-only commands, nothing identifying, 5.1 syntax). Its first real run is on the desktop.
+
 ## Wake-on-LAN test tool
 
 ```sh
