@@ -104,7 +104,13 @@ else
 fi
 
 # --- systemd units (pi-verification "systemd") -----------------------------------------------------------------------
-verify_out="$(systemd-analyze verify "$UNITS"/atlas-*.service "$UNITS"/atlas-*.socket "$UNITS"/atlas-*.timer 2>&1 || true)"
+# Only the unit files that exist: an unmatched pattern (no .timer before the backup is installed) would be passed on
+# literally and reported as an error (found in the window rehearsal, 2026-11-23).
+units=()
+for f in "$UNITS"/atlas-*.service "$UNITS"/atlas-*.socket "$UNITS"/atlas-*.timer; do
+  if [ -e "$f" ]; then units+=("$f"); fi
+done
+verify_out="$(systemd-analyze verify "${units[@]}" 2>&1 || true)"
 # Templates for services of later phases (services.conf enable=no) may point at a program that isn't shipped yet.
 templates="$(awk '!/^[[:space:]]*(#|$)/ && $2 == "no" { print $1 }' "$ETC/services.conf" | paste -sd'|' -)"
 pending="$(grep -E "^(${templates:-none})\.service: Command .* is not executable: No such file" <<<"$verify_out" || true)"

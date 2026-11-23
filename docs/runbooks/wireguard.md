@@ -22,11 +22,12 @@ Install `wireguard-tools` the same way as restic (backup.md step 1): download it
 
 ```sh
 # Mac
-limactl shell atlas -- bash -c 'cd /tmp && apt-get download wireguard-tools && sha256sum wireguard-tools_*_arm64.deb'
+limactl shell atlas -- bash -c 'cd /tmp && apt-get download wireguard-tools=1.0.20210914-3 && sha256sum wireguard-tools_*_arm64.deb'
 limactl copy atlas:/tmp/wireguard-tools_1.0.20210914-3_arm64.deb . && scp wireguard-tools_*_arm64.deb atlas-pi:/tmp/
-# Pi: the two hashes must match, then install and create the key
-apt-cache show wireguard-tools | grep '^SHA256:'; sha256sum /tmp/wireguard-tools_*_arm64.deb
-sudo apt install /tmp/wireguard-tools_*_arm64.deb
+# Pi: the two hashes must match (name the version: with backports enabled apt-cache lists two), then install offline
+# (--no-install-recommends: otherwise apt wants wireguard-dkms and downloads) and create the key
+apt-cache show wireguard-tools=1.0.20210914-3 | grep '^SHA256:'; sha256sum /tmp/wireguard-tools_*_arm64.deb
+sudo apt-get install --no-install-recommends /tmp/wireguard-tools_1.0.20210914-3_arm64.deb
 sudo ~/atlas-deploy/provisioning/gen-wg-key.sh
 ```
 
