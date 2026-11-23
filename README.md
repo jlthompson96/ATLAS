@@ -41,7 +41,7 @@ the Pi is provisioned and runs the audit log and the egress proxy.**
 - **Tested so far:**
   - About 1,380 backend tests, on the Mac and again on Python 3.13 in an ARM64 Debian VM (a few run on only one of the two).
   - The VM also gets the same provisioning and deploy as the Pi. Egress test PT-1 passes there, the audit log survives hard power cuts, and a release that crash-loops is rolled back automatically.
-- **On the Pi so far:** Pi OS installed and updated, with the final card layout (16 GiB root, 103 GiB data partition). Base setup done and checked: key-only SSH, wired only, swap in RAM, logs kept 30 days on the data partition. Provisioned: firewall loaded, first release deployed, `atlas-audit` and `atlas-egress` running, PT-1 passes, and the root filesystem is read-only.
+- **On the Pi so far:** Pi OS installed and updated, with the final card layout (16 GiB root, 103 GiB data partition). Base setup done and checked: key-only SSH, wired only, swap in RAM, logs kept 30 days on the data partition. Provisioned: firewall loaded, first release deployed, `atlas-audit` and `atlas-egress` running, PT-1 and PT-13 pass, the root filesystem is read-only, and the boot partition (which held a copy of the admin's password hash) is readable by root only.
 - **Not yet run on real hardware:** `atlas-hostd` (only tested against a simulated Windows layer), WireGuard, and the rest of ATLAS on the Pi (core, voice, UI and the integrations).
 - **No voice yet**, which comes in Phase 3.
 
@@ -209,7 +209,7 @@ rule is enforced and the test that must prove it. Test IDs are from PLAN.md §8.
 | Rule | Enforced by | Proven by | Status |
 |---|---|---|---|
 | **Only one process reaches the internet** | nftables `output` policy drop; only `atlas-egress`'s user may open 443 out. Per-caller hostname allowlists in the proxy, SNI must match the CONNECT host | PT-1, PT-2, PT-4 (72 h packet capture sees only allowlisted hosts) | **Built**; PT-1 passes in the ARM64 VM and on the Pi. PT-2/PT-4 (72 h capture) still to run |
-| **Every tool call is audited** | `atlas-audit`: append-only segments, SHA-256 hash chain, signed checkpoints, `chattr +a`. The actor comes from `SO_PEERCRED`, never from the record | PT-13 (tamper detection) | **Built**; in the VM root's overwrite of a segment is refused and the chain survives hard power cuts |
+| **Every tool call is audited** | `atlas-audit`: append-only segments, SHA-256 hash chain, signed checkpoints, `chattr +a`. The actor comes from `SO_PEERCRED`, never from the record | PT-13 (tamper detection) | **Built**; PT-13 passes on the Pi. Each record kind is pinned to the services that may write it (audit-record.v1 1.2.0). In the VM, root's overwrite of a segment is refused and the chain survives hard power cuts |
 | **Untrusted content cannot act** | A quarantined reader context with no tools; taint gating in the policy engine | RT-1..14 (prompt-injection red team) | **Built**; the Mac-testable red-team cases pass against a fake model that obeys injected instructions |
 | **Writes need you, not the model** | Pending-actions queue; approval bound to the payload's hash; step-up PIN; a separate executor process holds the only send credentials | AP-1 (changed payload rejected), AP-3 (expired approval rejected) | **Built** (signing, hash binding, single-use step-up, expiry); real sending arrives in Phase 6 |
 | **Voice cannot approve** | Approvals only from a paired device with a PIN. A TV saying "Hey Atlas, approve" does nothing | AP-2, RT-13 | Phase 6 |
