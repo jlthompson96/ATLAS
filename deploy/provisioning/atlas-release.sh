@@ -222,6 +222,7 @@ build_venv() {
       tar -C "$v" -cf - . >&3' sh "$wheels" "$lock" </dev/null |
     tar -x -C "$dest" --no-same-owner --no-same-permissions --no-overwrite-dir ||
     die "building the venv for $name failed"
+  rmdir /run/atlas-build 2>/dev/null || true # systemd removed atlas-build/<name>, but not the parent it created
   if [ -n "$(find "$dest" \( -type b -o -type c -o -type p -o -type s \) -print -quit)" ]; then
     die "the venv for $name contains special files"
   fi
