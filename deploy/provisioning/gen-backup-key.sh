@@ -17,12 +17,7 @@ need_root
 dest=/var/lib/atlas/credentials/atlas-backup/backup-repo-password.cred
 [ ! -e "$dest" ] || die "$dest exists. Changing the password needs 'restic key add' on every drive first (runbook backup.md)."
 
-console="$(tty 2>/dev/null || true)"
-[[ "$console" =~ ^/dev/tty[0-9]+$ ]] || die "run this on the Pi's own console (got '${console:-no terminal}'), not over SSH or in tmux"
-[ "$(readlink -f /proc/self/fd/1)" = "$console" ] || die "stdout must be the console too (no redirection or pipes)"
-if [ -n "${TMUX:-}" ] || [ -n "${STY:-}" ]; then
-  die "inside tmux or screen: the pane can be read from elsewhere"
-fi
+need_local_console
 
 key="$(head -c 16 /dev/urandom | base32 | tr -d '=\n')"
 [ "${#key}" -eq 26 ] || die "key generation failed"

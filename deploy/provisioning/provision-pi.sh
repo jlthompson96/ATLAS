@@ -77,9 +77,8 @@ for unit in "$deploy_dir"/systemd/*.service "$deploy_dir"/systemd/*.socket "$dep
 done
 install_file "$deploy_dir/systemd/atlas.tmpfiles.conf" /etc/tmpfiles.d/atlas.conf 644
 run systemd-tmpfiles --create /etc/tmpfiles.d/atlas.conf
-# Site values: the LAN as seen by the two units that need more than loopback (drop-ins are additive).
-write_file /etc/systemd/system/atlas-ui.service.d/lan.conf 644 "[Service]
-IPAddressAllow=$ATLAS_LAN_CIDR"
+# Site values: the LAN as seen by the units that need more than loopback (drop-ins are additive). atlas-ui's is written
+# below, with the Pi's own address from the site file.
 write_file /etc/systemd/system/atlas-core.service.d/lan.conf 644 "[Service]
 IPAddressAllow=$ATLAS_LAN_BROADCAST"
 # The proxy refuses connections into the LAN's own prefixes even when they look public (global IPv6 prefix, review F6).
@@ -138,11 +137,33 @@ write_file /etc/systemd/system/systemd-time-wait-sync.service.d/50-atlas.conf 64
   "[Service]" "TimeoutStartSec=90s")"
 run systemctl enable systemd-time-wait-sync.service
 
+log "== atlas-ui (runbook ui-on-pi.md)"
+ensure_dir "$UI_TLS_DIR" 0755 root:root
+ui_ip="$(pi_lan_ip "$site_file")"
+ui_conf="[Service]
+IPAddressAllow=$ATLAS_LAN_CIDR"
+if [ -n "$ui_ip" ]; then
+  ui_conf+="
+Environment=ATLAS_UI_LAN_IP=$ui_ip"
+fi
+write_file /etc/systemd/system/atlas-ui.service.d/lan.conf 644 "$ui_conf"
+
 log "== enable units"
 run systemctl daemon-reload
+# A service is enabled only once it can start: every credential it loads exists (and for atlas-ui, its address and
+# certificate). Until then a deploy's health check would fail on it and roll back. Rerun after storing credentials.
 enable_args=()
 for name in $(enabled_services "$SERVICES_CONF"); do
-  enable_args+=("$name.service")
+  missing="$(missing_credentials "$deploy_dir/systemd/$name.service" | tr '\n' ' ')"
+  if [ "$name" = atlas-ui ]; then
+    [ -n "$ui_ip" ] || missing+="PI_LAN_IP in $site_file "
+    [ -f "$UI_TLS_DIR/atlas-ui.crt" ] || missing+="$UI_TLS_DIR/atlas-ui.crt "
+  fi
+  if [ -n "$missing" ]; then
+    log "note    $name.service not enabled yet; missing: ${missing% }"
+  else
+    enable_args+=("$name.service")
+  fi
 done
 enable_args+=(atlas-audit.socket)
 run systemctl enable "${enable_args[@]}"

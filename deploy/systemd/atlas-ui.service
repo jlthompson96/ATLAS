@@ -1,6 +1,8 @@
 # atlas-ui.service: Static HUD and /ws/events server, TLS, device pairing.
 # Source of truth: contracts/services.md (user, credentials, sockets, ports, sandbox baseline). Status: Phase 2.
-# TEMPLATE: the module below does not exist yet (Phase 2); provision-pi.sh installs but does not enable it.
+# Site values: provision-pi.sh writes /etc/systemd/system/atlas-ui.service.d/lan.conf with ATLAS_UI_LAN_IP (the Pi's LAN
+# address, PI_LAN_IP in the nftables site file) and enables the unit only once that and the credentials exist.
+# The certificate is public, in /etc/atlas/tls/ (gen-ui-keys.sh; the local CA keeps no private key, services.md section 4).
 #
 # Relaxations of the services.md section 5 baseline (each is also marked RELAXED where it applies):
 #   IPAddressAllow: loopback here, plus the home LAN (services.md section 5). The LAN CIDR is a site value:
@@ -13,6 +15,9 @@
 Description=ATLAS ui: Static HUD and /ws/events server, TLS, device pairing
 Requires=nftables.service
 After=nftables.service
+# It binds the Pi's LAN address, which must exist first.
+Wants=network-online.target
+After=network-online.target
 # Known issue P2: start only once the clock is right (audit timestamps, TLS). provision-pi.sh caps the wait
 # (systemd-time-wait-sync, 90 s), so a Pi without internet still starts.
 Wants=time-sync.target
@@ -75,9 +80,11 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/var/lib/atlas/current/backend
 
 # --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
-ExecStart=/var/lib/atlas/current/venv/atlas-ui/bin/python -m atlas.ui_server
+ExecStart=/var/lib/atlas/current/venv/atlas-ui/bin/python -m atlas.ui_server serve --tls-cert /etc/atlas/tls/atlas-ui.crt \
+    --host 127.0.0.1 --host ${ATLAS_UI_LAN_IP} --origin https://${ATLAS_UI_LAN_IP}
 Restart=on-failure
-RestartSec=2
+# 5 s: five quick failures (say, the address not up yet) stay under systemd's default limit of 5 starts in 10 s.
+RestartSec=5
 TimeoutStopSec=15
 
 [Install]

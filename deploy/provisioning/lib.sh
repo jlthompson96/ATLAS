@@ -265,3 +265,55 @@ service_list() {
 enabled_services() {
   awk '!/^[[:space:]]*(#|$)/ && $2 == "yes" { print $1 }' "$1"
 }
+
+# --- consoles, overlay and credentials ------------------------------------------------------------------------------
+
+# need_local_console: refuse unless stdin and stdout are the Pi's own virtual console (/dev/ttyN), outside tmux or screen.
+# For secrets a person chooses or must write down (backup password, approval PIN): a Claude Code session can read a
+# tmux pane, and SSH sessions can be logged.
+need_local_console() {
+  local console
+  console="$(tty 2>/dev/null || true)"
+  [[ "$console" =~ ^/dev/tty[0-9]+$ ]] || die "run this on the Pi's own console (got '${console:-no terminal}'), not over SSH or in tmux"
+  [ "$(readlink -f /proc/self/fd/1)" = "$console" ] || die "stdout must be the console too (no redirection or pipes)"
+  if [ -n "${TMUX:-}" ] || [ -n "${STY:-}" ]; then
+    die "inside tmux or screen: the pane can be read from elsewhere"
+  fi
+}
+
+# root_is_overlay: true while the read-only root overlay is on; anything written to /etc then vanishes at the next boot.
+root_is_overlay() {
+  [ "$(findmnt -n -o FSTYPE / 2>/dev/null)" = overlay ]
+}
+
+# missing_credentials UNIT_FILE: the LoadCredentialEncrypted= files that don't exist, one per line. A credential with an
+# empty SetCredential= default is optional (atlas-core's LM Studio token before the desktop is linked).
+missing_credentials() {
+  local unit="$1" line id path
+  while IFS= read -r line; do
+    id="${line#LoadCredentialEncrypted=}"
+    path="${id#*:}"
+    id="${id%%:*}"
+    if grep -qx "SetCredential=$id:" "$unit"; then
+      continue
+    fi
+    [ -f "$path" ] || printf '%s\n' "$path"
+  done < <(grep '^LoadCredentialEncrypted=' "$unit")
+}
+
+# --- atlas-ui (Phase 2; contracts/services.md sections 2 and 4) ------------------------------------------------------
+UI_TLS_DIR=/etc/atlas/tls # ca.crt and atlas-ui.crt: public; the CA keeps no private key
+UI_CRED_DIR=/var/lib/atlas/credentials/atlas-ui
+UI_CERT_DAYS=800 # Apple accepts at most 825 days for a TLS server certificate
+
+# pi_lan_ip SITE: the Pi's LAN address (`define PI_LAN_IP` in the nftables site file); nothing if unset or still the
+# documentation placeholder. atlas-ui binds it and its certificate names it.
+pi_lan_ip() {
+  local ip
+  ip="$(site_define PI_LAN_IP "$1")"
+  case "$ip" in
+    '' | 192.0.2.*) return 0 ;;
+  esac
+  [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "$1: PI_LAN_IP must be a plain IPv4 address"
+  printf '%s\n' "$ip"
+}

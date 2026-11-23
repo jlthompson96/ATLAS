@@ -5,6 +5,8 @@
 define LAN_CIDR = 192.0.2.0/24          # the home LAN: may reach SSH (:22), the HUD (:443) and ping
 define LAN_BROADCAST = 192.0.2.255      # subnet broadcast (Wake-on-LAN)
 define LAN_DNS = 192.0.2.1              # LAN resolver (router or Pi-side resolver); PLAN 5.7
+define PI_LAN_IP = 192.0.2.48           # this Pi's reserved LAN address: atlas-ui binds it and its certificate names it
+#   (not used by the rules; provision-pi.sh and gen-ui-keys.sh read it). Until it is set, atlas-ui stays off.
 define NTP_SERVERS = { 216.239.35.0, 216.239.35.4, 216.239.35.8, 216.239.35.12 }   # time.google.com's fixed addresses
 #   (PLAN 5.7). Plain IPv4 only: timesyncd uses this list too. A LAN time server instead: { 192.0.2.1 }. Don't mix
 #   Google's servers with others: Google smears leap seconds, most others step.

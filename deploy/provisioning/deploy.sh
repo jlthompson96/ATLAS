@@ -7,8 +7,8 @@
 #   PI_HOST=... PI_USER=... deploy/provisioning/deploy.sh list
 #
 # What ships is `git archive HEAD` of backend/atlas, contracts, the per-service locks and services.conf (never
-# uncommitted files, tests, virtualenvs or secrets), plus the hash-verified aarch64 wheels for each lock so the Pi
-# installs offline. A new release directory is unpacked beside the others, then the `current` symlink is switched
+# uncommitted files, tests, virtualenvs or secrets), the HUD built from `git archive HEAD` of frontend/hud (hud/; no
+# Node on the Pi), plus the hash-verified aarch64 wheels for each lock so the Pi installs offline. A new release directory is unpacked beside the others, then the `current` symlink is switched
 # and the enabled units restarted by `atlas-release` on the Pi. The last 3 releases are kept. A failed health check
 # switches back automatically. Each deploy writes a few MB to the microSD (PLAN 3.5).
 #
@@ -48,7 +48,7 @@ case "$action" in
 esac
 
 cd "$repo"
-git diff --quiet HEAD -- backend contracts deploy 2>/dev/null || log "warning: uncommitted changes are NOT deployed (git archive HEAD)"
+git diff --quiet HEAD -- backend contracts deploy frontend/hud 2>/dev/null || log "warning: uncommitted changes are NOT deployed (git archive HEAD)"
 commit="$(git rev-parse --short=12 HEAD)"
 version="$(date -u +%Y%m%dT%H%M%SZ)-$commit"
 work="$(mktemp -d)"
@@ -70,6 +70,22 @@ git archive --format=tar HEAD backend/atlas backend/pyproject.toml contracts dep
 # server ("Never deployed", contracts/services.md section 2).
 find "$stage" -name __pycache__ -prune -exec rm -rf {} +
 rm -rf "$stage/backend/atlas/ui_server/mock"
+
+# The HUD, built from the committed frontend/hud only (services.md section 6): a clean copy, `npm ci --ignore-scripts`
+# against package-lock.json's integrity hashes (threat T6), `npm run build`. The working tree's node_modules and dist/
+# are never shipped.
+if [ "$DRY_RUN" = "1" ]; then
+  log "[dry-run] would build the HUD from HEAD into hud/"
+else
+  command -v npm >/dev/null || die "npm is needed to build the HUD"
+  git archive --format=tar HEAD frontend/hud | tar -x -C "$work"
+  (cd "$work/frontend/hud" && npm ci --ignore-scripts --prefer-offline --no-audit --no-fund >/dev/null && npm run -s build >/dev/null) ||
+    die "building the HUD failed"
+  [ -f "$work/frontend/hud/dist/index.html" ] || die "the HUD build produced no index.html"
+  cp -R "$work/frontend/hud/dist" "$stage/hud"
+  rm -rf "$work/frontend"
+  log "hud: $(find "$stage/hud" -type f | wc -l | tr -d ' ') files"
+fi
 
 # Wheels for each per-service lock: downloaded on this Mac, hash-checked against the lock, installed offline on the Pi.
 pip=python3

@@ -25,7 +25,7 @@ class UiConfig:
     tls_key: Path
     device_key: bytes = field(repr=False)
     pin_hash: str = field(repr=False)
-    state_dir: Path = Path("/var/lib/atlas/atlas-ui")
+    state_dir: Path = Path("/var/lib/atlas/ui")  # the unit's StateDirectory=atlas/ui
     static_dir: Path = Path("/var/lib/atlas/current/hud")
     core_socket: Path = Path("/run/atlas/core.sock")
     #: Addresses to bind: the Pi's LAN IP and loopback (services.md section 2). Never 0.0.0.0 by default.

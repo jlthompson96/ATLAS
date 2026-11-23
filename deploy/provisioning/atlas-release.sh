@@ -8,13 +8,13 @@
 #   atlas-release prune                         keep the newest 3 releases (plus current and previous)
 #   atlas-release list
 #
-# Layout (contracts/services.md section 6): /var/lib/atlas/releases/<version>/{backend,contracts,deploy,venv/<service>},
+# Layout (contracts/services.md section 6): /var/lib/atlas/releases/<version>/{backend,contracts,deploy,hud,venv/<service>},
 # /var/lib/atlas/current -> releases/<version>, /var/lib/atlas/previous -> the release `current` replaced.
 # Releases are root-owned and read-only to every service.
 #
 # THREAT MODEL (review F2). The admin account can run this as root, and the tarball it uploads is attacker-influenced data.
 # Root therefore never executes anything that came out of the tarball:
-#  - only the top-level entries backend/ contracts/ deploy/ wheels/ are accepted (no venv/, no scripts), links and special
+#  - only the top-level entries backend/ contracts/ deploy/ hud/ wheels/ are accepted (no venv/, no scripts), links and special
 #    files are refused, and the extraction directory is mode 0700;
 #  - the list of services comes from the root-owned /etc/atlas/services.conf, never from the tarball, and each name is
 #    validated;
@@ -36,7 +36,7 @@ HEALTH_STABLE=10 # seconds every unit must stay up, unrestarted, after becoming 
 VERSION_RE='^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}$'
 SERVICE_RE='^atlas-[a-z]+$'
 CONF=/etc/atlas/services.conf
-ALLOWED_TOP="backend contracts deploy wheels"
+ALLOWED_TOP="backend contracts deploy hud wheels" # hud/: the built HUD, static files only (services.md 1.5.0)
 BUILD_STATE=/var/lib/atlas-build
 BUILD_PRIVATE=/var/lib/private/atlas-build # where DynamicUser= really keeps BUILD_STATE
 MAX_TARBALL_BYTES=$((512 * 1024 * 1024))   # a release is a few MB; bounds the copy out of incoming/

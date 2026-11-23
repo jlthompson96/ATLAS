@@ -98,6 +98,8 @@ def test_gen_backup_key_never_echoes_or_logs_the_key() -> None:
     text = (PROV / "gen-backup-key.sh").read_text()
     assert "read -rsp" in text  # typed back without echo
     assert 'printf \'%s\' "$key" | "$here/store-credential.sh" atlas-backup backup-repo-password' in text
-    assert "TMUX" in text and "/dev/tty[0-9]+" in text
+    assert "\nneed_local_console\n" in text
+    lib = (PROV / "lib.sh").read_text()
+    assert "TMUX" in lib and "/dev/tty[0-9]+" in lib
     assert "logger" not in text and "| tee" not in text
     assert os.access(PROV / "gen-backup-key.sh", os.X_OK) and os.access(MOUNT, os.X_OK)
