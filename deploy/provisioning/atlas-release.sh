@@ -212,6 +212,7 @@ build_venv() {
     || die "building the venv for $name failed"
   cp -a --no-preserve=ownership "$BUILD_RUNTIME/$name/venv" "$dest"
   rm -rf "${BUILD_RUNTIME:?}/$name"
+  rmdir "$BUILD_RUNTIME" 2>/dev/null || true # systemd created the parent for RuntimeDirectory=atlas-build/<name>
   BUILDING=""
 }
 

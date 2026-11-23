@@ -416,7 +416,7 @@ systemd-run() {{
     assert "RuntimeDirectory=atlas-build/atlas-audit" in args and "StateDirectory" not in args
     assert "pip --isolated uninstall --quiet --yes pip" in args
     assert (base / "releases" / V / "venv" / "atlas-audit" / "lib" / "x").read_text() == "built\n"
-    assert not (tmp_path / "build" / "atlas-audit").exists()
+    assert not (tmp_path / "build").exists()  # nothing of the build left in RAM, not even the parent
     assert list((tmp_path / "scratch").iterdir()) == []
 
 
