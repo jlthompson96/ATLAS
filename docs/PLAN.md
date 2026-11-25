@@ -82,7 +82,7 @@ Service identifiers: `atlas-core`, `atlas-voice`, `atlas-egress`, `atlas-audit`,
 | LLM host 8 GB VRAM, 64 GB RAM | Unverified | `nvidia-smi`, OS memory report. |
 | LLM host supports WoL | Unverified, **high risk** | Benchmark B6 (§2.13). |
 | Cooling unspecified | Mismatch with the requirement. The Pi 5 throttles under sustained load without cooling [S19]. | Recommend the Active Cooler (R-HW2). |
-| Audio hardware undecided | **Resolved (rev 2):** USB conference speakerphone | Phase 3 spike picks the model. |
+| Audio hardware undecided | **Resolved (rev 2):** USB conference speakerphone. **Changed 2026-11-25 ([ADR 0003](adr/0003-voice-from-client-device.md)):** the client device's microphone, tap-to-talk; no audio hardware on the Pi for now. | Phase 3 settles codec and transport. |
 
 ### 0.5 Decision record (rev 2)
 
@@ -92,8 +92,8 @@ Your choices after reviewing rev 1, and what each one changes:
 |---|---|---|---|
 | D1 | Storage | microSD card | Option S2: read-only overlay root, writable data partition, hard write budget (§2.7, §3.5). |
 | D5 | Disk unlock | Skip disk encryption so reboots are automatic | **Deviates from the "encrypt data at rest" requirement.** Compensating controls in §2.7; threat T10 re-rated. |
-| D2 | Audio hardware | USB conference speakerphone | R-HW1 updated (§2.6); far-field and barge-in spike in Phase 3. |
-| D3 | Wake phrase | "Hey Atlas" | Unchanged: custom openWakeWord model plus push-to-talk. |
+| D2 | Audio hardware | USB conference speakerphone. **Changed 2026-11-25 ([ADR 0003](adr/0003-voice-from-client-device.md)):** the microphone and speaker of the device running the HUD, tap-to-talk | R-HW1 updated (§2.6); the far-field and barge-in spike only if a room microphone is added later. |
+| D3 | Wake phrase | "Hey Atlas" | Custom openWakeWord model plus push-to-talk. **Since 2026-11-25 ([ADR 0003](adr/0003-voice-from-client-device.md)):** push-to-talk in the HUD is the primary path; the wake word only with a later room microphone. |
 | D6 | Email | Gmail, weekly re-authorization accepted | Gmail API with split grants; one weekly re-consent flow in the HUD (§2.10). |
 | A3/A4 | LLM host | Windows desktop | Treated as your daily-use Windows PC. Adds work on starting without sign-in, Modern Standby, and shared VRAM (§2.8, §5.4, §5.6). The ATLAS VLAN is dropped (§5.1). |
 | D10 | Research search | Self-hosted SearXNG | SearXNG on the Pi, localhost only, engines reached through the egress proxy (§2.13). |
@@ -1536,14 +1536,14 @@ All development happens on one Mac (Apple Silicon, `arm64`, macOS). It builds fo
 
 **Deliverables**
 
-- `atlas-voice`: wake word (custom "Hey Atlas"), VAD, Moonshine STT, Piper TTS, barge-in, PTT.
-- Speakerphone model chosen after the R-HW1 spike: pickup at 1/3/5 m, self-trigger rate, barge-in.
+- `atlas-voice`: VAD, Moonshine STT, Piper TTS, barge-in, PTT, with audio from the HUD in a browser (tap-to-talk, [ADR 0003](adr/0003-voice-from-client-device.md)) through a source interface that a room microphone can join later.
+- *Only with a room microphone (optional, later):* wake word (custom "Hey Atlas") and the speakerphone spike (R-HW1: pickup at 1/3/5 m, self-trigger rate, barge-in).
 - Precomputed TTS envelope streaming with clock sync.
 - **Benchmarks B1, B2, B3, B4, B9.**
 
-**Acceptance tests:** LT-1..4 (latency targets in §3.3); ST-1 (A/V sync ≤ 40 ms p95); B4 thresholds; RT-13 (self-trigger); FI-4 (mic unplugged → text fallback).
+**Acceptance tests:** LT-1..4 (latency targets in §3.3); ST-1 (A/V sync ≤ 40 ms p95, on the client device); FI-4 (microphone denied or STT down → text fallback). With a room microphone only: B4 thresholds, RT-13 (self-trigger).
 
-**Exit criteria:** warm end-to-end p50 ≤ 3.0 s on a 100-utterance set; 24 h wake-word soak passes.
+**Exit criteria:** warm end-to-end p50 ≤ 3.0 s on a 100-utterance set, from releasing the button to the first audio on the device. (The 24 h wake-word soak applies only to the optional room microphone, [ADR 0003](adr/0003-voice-from-client-device.md).)
 
 ### Phase 4: Email and Discord, read-only
 
