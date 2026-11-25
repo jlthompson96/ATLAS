@@ -5,6 +5,10 @@
 #   IPAddressAllow: the desktop over WireGuard (10.77.0.2: LM Studio :1234, hostd :8770) and the Wake-on-LAN
 #     broadcast (255.255.255.255 here; provision-pi.sh adds the subnet broadcast in a lan.conf drop-in).
 #   RestrictAddressFamilies: AF_INET added for those two paths (nftables limits them to skuid atlas-core).
+# Additional hardening left out here (it isn't part of the baseline; every other unit keeps it):
+#   ProcSubset=pid: host.status (core/hoststatus.py) reads the Pi's own counters, /proc/stat, /proc/meminfo,
+#     /proc/diskstats and /proc/uptime, which ProcSubset=pid hides. ProtectProc=invisible stays, so other
+#     processes remain hidden (owner's decision, 2026-11-25).
 
 [Unit]
 Description=ATLAS core: Orchestrator, policy engine, task queue, state machine, power controller
@@ -59,7 +63,7 @@ ProtectClock=yes
 ProtectHostname=yes
 ProtectKernelLogs=yes
 ProtectProc=invisible
-ProcSubset=pid
+# RELAXED (not baseline): no ProcSubset=pid, see the header comment.
 RestrictRealtime=yes
 RemoveIPC=yes
 UMask=0077

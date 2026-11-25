@@ -43,7 +43,8 @@ from atlas.core.auditing import AuditSink
 from atlas.core.control import ControlServer, EventHub, KernelPeers, PeerAuthenticator, Readiness, TextHooks
 from atlas.core.executor_link import SocketExecutorLink
 from atlas.core.fallback import LocalResponder, parse_intent
-from atlas.core.link import LinkTextHooks, add_link_arguments, build_link
+from atlas.core.hoststatus import HostStatusPublisher, PiMetrics
+from atlas.core.link import Link, LinkTextHooks, add_link_arguments, build_link
 from atlas.core.runtime import build_runtime
 from atlas.executor.approval_record import ApprovalKeyError, ApprovalSigner, load_signing_key
 from atlas.llm.interface import (
@@ -212,6 +213,24 @@ def credentials_dir() -> Path:
     return Path(directory)
 
 
+def start_host_status(
+    hub: EventHub, link: Link | None, stop: asyncio.Event, pi: PiMetrics | None = None
+) -> asyncio.Task[None] | None:
+    """Publish ``host.status`` while the Pi's counters can be read; on any other machine, nothing (no samples)."""
+    pi = pi if pi is not None else PiMetrics()
+    if not pi.available():
+        log.info("host.status off: this machine's /proc and /sys counters can't be read")
+        return None
+    publisher = HostStatusPublisher(
+        hub.emit,
+        pi,
+        backend=link.backend if link is not None else None,
+        controller=link.controller if link is not None else None,
+        hostd=link.hostd if link is not None else None,
+    )
+    return asyncio.ensure_future(publisher.run(stop))
+
+
 async def run(args: argparse.Namespace) -> int:
     sock = systemd_socket()
     if sock is None and args.socket is None:
@@ -221,6 +240,7 @@ async def run(args: argparse.Namespace) -> int:
     hub = EventHub()
     hooks: TextHooks
     backend: LLMBackend
+    link: Link | None = None
     if args.backend == "lmstudio":
         if not args.model:
             raise ServiceError("--backend lmstudio needs --model, so starting never waits for the desktop")
@@ -250,7 +270,10 @@ async def run(args: argparse.Namespace) -> int:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
+    status = start_host_status(hub, link, stop)
     await stop.wait()
+    if status is not None:
+        await status
     await control.stop()
     await audit.close()
     return 0

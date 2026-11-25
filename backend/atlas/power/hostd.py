@@ -65,6 +65,10 @@ class GpuReport:
     vram_free_mb: int
     llm_server_vram_mb: int
     foreign_vram_mb: int
+    # For the HUD's System panel (core/hoststatus.py); None if hostd leaves one out.
+    vram_used_mb: int | None = None
+    util_pct: int | None = None
+    temp_c: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +99,14 @@ def _obj(raw: bytes) -> dict[str, Any]:
         raise HostdError("response is not JSON") from None
     if not isinstance(value, dict):
         raise HostdError("response is not an object")
+    return value
+
+
+def _opt_int(body: dict[str, Any], key: str, low: int, high: int | None) -> int | None:
+    """An optional integer in range, or None (absent, not an integer, or out of range: never guessed)."""
+    value = body.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < low or (high is not None and value > high):
+        return None
     return value
 
 
@@ -169,6 +181,9 @@ class HostdClient:
                 int(body["vram_free_mb"]),
                 int(body["llm_server_vram_mb"]),
                 int(body["foreign_vram_mb"]),
+                vram_used_mb=_opt_int(body, "vram_used_mb", 0, None),
+                util_pct=_opt_int(body, "util_pct", 0, 100),
+                temp_c=_opt_int(body, "temp_c", -50, 150),
             )
         except (KeyError, TypeError, ValueError):
             raise HostdError("bad gpu response") from None
