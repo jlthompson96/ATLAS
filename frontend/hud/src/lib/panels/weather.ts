@@ -13,6 +13,15 @@ export function weatherKind(code: number): WeatherKind {
   return 'unknown';
 }
 
-export function formatTemp(c: unknown): string {
-  return typeof c === 'number' && Number.isFinite(c) ? `${Math.round(c)}°` : '—';
+/** A Celsius reading (the contract's unit) in the unit the viewer chose, rounded: `7°`, or `45°` in Fahrenheit. */
+export function formatTemp(c: unknown, unit: 'c' | 'f' = 'c'): string {
+  if (typeof c !== 'number' || !Number.isFinite(c)) return '—';
+  const value = unit === 'f' ? (c * 9) / 5 + 32 : c;
+  return `${Math.round(value) || 0}°`; // `|| 0`: never "-0°"
+}
+
+/** Wind (km/h in the contract) in the units that go with the temperature choice: mph with Fahrenheit. */
+export function formatWind(kph: unknown, unit: 'c' | 'f' = 'c'): string {
+  if (typeof kph !== 'number' || !Number.isFinite(kph)) return '—';
+  return unit === 'f' ? `${Math.round(kph * 0.621371)} mph` : `${Math.round(kph)} km/h`;
 }

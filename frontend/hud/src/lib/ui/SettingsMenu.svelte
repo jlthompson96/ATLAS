@@ -1,6 +1,13 @@
 <script lang="ts">
   import { useHud } from '../ctx';
-  import { resolveProfile, type MotionSetting, type ProfileSetting, type QualitySetting } from '../state/settings.svelte';
+  import {
+    localeTemperatureUnit,
+    resolveProfile,
+    type MotionSetting,
+    type ProfileSetting,
+    type QualitySetting,
+    type TemperatureSetting
+  } from '../state/settings.svelte';
   import LayoutEditor from './LayoutEditor.svelte';
   import Modal from './Modal.svelte';
 
@@ -37,6 +44,13 @@
         <option value="kiosk">Kiosk</option>
         <option value="remote">Remote</option>
         <option value="compact">Compact</option>
+      </select>
+
+      <label for="set-temperature">Temperature</label>
+      <select id="set-temperature" class="input" value={settings.temperature} onchange={(e) => settings.set({ temperature: e.currentTarget.value as TemperatureSetting })}>
+        <option value="auto">Automatic ({localeTemperatureUnit(settings.locale) === 'f' ? '°F' : '°C'})</option>
+        <option value="f">Fahrenheit (°F, wind in mph)</option>
+        <option value="c">Celsius (°C, wind in km/h)</option>
       </select>
     </div>
 

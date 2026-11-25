@@ -9,8 +9,10 @@ local grammar answering time/date/desktop questions first and the wake flow's pr
 
 One process, but the two halves talk over a real Unix socket (the control socket) exactly as they will on the
 Pi. Everything it creates (throwaway TLS CA, device key, PIN hash for ``0000``, paired-device registry) lives
-under ``--dir`` (default ``backend/.atlas-dev``, gitignored). Demo data (weather, mail counts, ...) comes from
-the mock scenarios' baseline fixtures; the orb, transcript, pending actions and approvals are real atlas-core.
+under ``--dir`` (default ``backend/.atlas-dev``, gitignored). With the scripted model, the panels and host status
+are the mock scenarios' baseline samples (weather labelled "Demo data"). With a real model there is no sample host
+status (it would say the desktop is asleep while it answers), and sample panels only with ``--demo-panels``. The orb,
+transcript, pending actions and approvals are real atlas-core.
 
 Not for deployment: "sending" an approved email only logs, and the control-socket peer check is the
 same-user fallback (``SameUserPeers``).
@@ -181,6 +183,29 @@ def ensure_dev_files(directory: Path) -> tuple[Path, Path, bytes, str]:
     return cert, tls_key, key_file.read_bytes(), pin_file.read_text(encoding="utf-8").strip()
 
 
+DEMO_LABEL = "Demo data"
+
+
+def demo_frames(*, real_model: bool, demo_panels: bool | None) -> list[tuple[str, dict[str, Any]]]:
+    """The sample ``host.status`` and ``panel.update`` frames to show, from the mock baseline.
+
+    Samples are never passed off as real (found 2026-11-25: with LM Studio answering, the sample said the desktop
+    was asleep). With a real model the sample host status is never sent, and the sample panels only on request
+    (``demo_panels``; by default only with the scripted model). The sample weather is labelled.
+    """
+    show_panels = (not real_model) if demo_panels is None else demo_panels
+    frames: list[tuple[str, dict[str, Any]]] = []
+    for step in sc.load(sc.BASELINE).setup:
+        if step.type == "host.status" and not real_model:
+            frames.append((step.type, sc.resolve(step.payload, now_ms(), 1.0)))
+        elif step.type == "panel.update" and show_panels:
+            payload = sc.resolve(step.payload, now_ms(), 1.0)
+            if payload["panel_id"] == "weather":
+                payload = {**payload, "data": {**payload["data"], "location_label": DEMO_LABEL}}
+            frames.append((step.type, payload))
+    return frames
+
+
 async def run(args: argparse.Namespace) -> int:
     directory = Path(args.dir)
     cert, tls_key, device_key, pin_hash = ensure_dev_files(directory)
@@ -211,9 +236,9 @@ async def run(args: argparse.Namespace) -> int:
         else None
     )
     await control.start(sock)
-    for step in sc.load(sc.BASELINE).setup:  # demo panels and host status (not real data)
-        if step.type in ("host.status", "panel.update"):
-            await hub.emit(step.type, sc.resolve(step.payload, now_ms(), 1.0))
+    frames = demo_frames(real_model=link is not None, demo_panels=args.demo_panels)
+    for type_, payload in frames:
+        await hub.emit(type_, payload)
 
     # --- atlas-ui ---
     cfg = UiConfig(
@@ -237,6 +262,12 @@ async def run(args: argparse.Namespace) -> int:
     print(
         f"Step-up PIN: {DEV_PIN}.  The browser will warn about the dev certificate; trust {directory}/tls/ca.pem or proceed."
     )
+    if link is None:
+        print("Panels and system status: sample data (scripted model).")
+    elif any(type_ == "panel.update" for type_, _ in frames):
+        print("Panels: sample data (--demo-panels). System status: none yet (needs atlas-hostd and the Pi).")
+    else:
+        print("Panels and system status: none yet; they need real sources. --demo-panels shows samples.")
     print(
         "Try: 'what time is it', 'check my email', 'send an email to Dana', 'research solar panels'. Ctrl-C to stop.\n"
     )
@@ -260,6 +291,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dir", default=str(REPO / "backend" / ".atlas-dev"))
     parser.add_argument("--static-dir", default=str(REPO / "frontend" / "hud" / "dist"))
     parser.add_argument("--kiosk-code", action="store_true", help="also print a pairing code for a kiosk device")
+    parser.add_argument(
+        "--demo-panels",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="show the mock's sample panels (default: only with the scripted model; never sample host status "
+        "with a real model)",
+    )
     add_link_arguments(parser)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

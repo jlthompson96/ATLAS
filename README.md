@@ -402,6 +402,8 @@ cd ../../backend && .venv/bin/python -m atlas.ui_server.dev          # prints ht
 
 Open the URL and accept the throwaway local certificate. Enter the pairing code, type a request, and approve a proposed email with PIN `0000`. The "send" only writes to the log.
 
+With the scripted model the panels and system status are samples (the weather says "Demo data"). With a real model they stay empty until real sources exist; `--demo-panels` brings the sample panels back. ATLAS's own replies are formatted (bold, lists, code); anything from an untrusted source stays plain text. Settings has a °F/°C choice.
+
 The Phase 2 acceptance checks run the same pieces in headless Chrome (needs Google Chrome, or `CHROME_BIN`):
 
 ```sh

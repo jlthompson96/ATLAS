@@ -2,7 +2,7 @@
 
 Source: PLAN Phase 2 (`atlas-ui`), contracts/services.md (atlas-ui, `core.sock`). Code: `backend/atlas/ui_server/`, `backend/atlas/core/control.py`.
 
-This runs the **real** atlas-core orchestrator and approval flow (with the scripted fake model), the **real** control socket, the **real** `atlas-ui` server over HTTPS/WSS, and the built HUD. Weather, mail counts, markets and host status are demo fixtures from the mock scenarios' baseline; the orb, transcript, pending actions and approvals are live. For pure HUD work against scripted scenarios, keep using the mock server (CLAUDE.md).
+This runs the **real** atlas-core orchestrator and approval flow (with the scripted fake model), the **real** control socket, the **real** `atlas-ui` server over HTTPS/WSS, and the built HUD. Weather, mail counts, markets and host status are samples from the mock scenarios' baseline (the weather panel says "Demo data"); the orb, transcript, pending actions and approvals are live. With a real model (below) the samples are left out. Temperatures show in °F or °C per browser: Settings, Temperature (automatic follows the browser's region). For pure HUD work against scripted scenarios, keep using the mock server (CLAUDE.md).
 
 ## Run it
 
@@ -46,6 +46,7 @@ cd backend
   - If the desktop doesn't come up, the orb shows `llm_unreachable` and the request is saved.
   - The next request that reaches the model delivers the saved ones first.
 - Add `--idle-sleep` to let ATLAS put the desktop back to sleep after 20 idle minutes.
+- No sample panels and no sample system status: a sample would contradict the real desktop (the first run showed the desktop "asleep" while it answered). The panels wait for real sources (`atlas-hostd`, the Pi, Phase 4). `--demo-panels` brings the sample panels back for layout work; the sample host status never comes back with a real model.
 - The demo inbox (Dana's fake email) and the recipient allowlist (`dana@example.org`) stay the same, so `send an email to Dana` still produces an approval card if the model proposes it. The model decides, so the wording varies.
 - The same caveats as the CLI apply. The LAN link is plain HTTP until WireGuard exists, so type only fake content.
 
@@ -79,6 +80,7 @@ Each run fails on a CSP violation, an off-origin request, a console error, an un
 | UI-SEC-2: cross-origin rejected | same file (WebSocket and `/api/pair` with a foreign `Origin`) | pass |
 | UI-SEC-3: no external requests | `build.test.ts` (no off-origin URL in the bundle) and `npm run acceptance` (every request the page makes, every run) | pass |
 | UI-SEC-4: zero CSP violations | CSP header and meta tests, plus `npm run acceptance` (all 7 states rendered in Chrome) | pass |
+| Untrusted text stays plain | `untrusted.test.ts` (no HTML sinks, hostile text shown literally) and `markdown.test.ts`: ATLAS's own replies get a small Markdown subset (bold, italic, code, headings, lists) built as text nodes only, with no links or images; what you type and any reply with tainted provenance are never formatted | pass |
 | A11Y-1: axe, zero serious issues | `a11y.test.ts` (jsdom, every state and dialog) and axe in Chrome at 1920, 1000 and 390 px, kiosk, real `atlas-ui` | pass. In Chrome, axe can't decide colour contrast for text over blurred or gradient panels (it reports them as "incomplete"); the design tokens' contrast is checked in `a11y.test.ts`. |
 | A11Y-2: reduced motion honoured | `a11y.test.ts`, `orb.test.ts`, and Chrome with `prefers-reduced-motion: reduce` (only the static tier ran) | pass |
 | A11Y-3: keyboard-only operation | `a11y.test.ts` (real controls only, the whole approval flow from the keyboard) | pass (jsdom; a hands-on keyboard pass on the Pi kiosk is still worth doing) |
