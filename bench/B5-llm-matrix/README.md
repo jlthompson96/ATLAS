@@ -5,8 +5,8 @@ B5 chooses the model (PLAN §2.8, §8.1, Phase 1 exit criteria). A model is acce
 | Criterion | Threshold | How `b5.py` measures it |
 |---|---|---|
 | Tool-call accuracy | ≥ 95% | 50 cases × `--repeat` passes (default 3). Every graded attempt counts. |
-| TTFT | ≤ 800 ms at a 2K-token prompt | Median of `--perf-trials` (default 5) streamed requests of ~2,000 prompt tokens, with a fresh nonce at the start of the user turn. Measured at the client: time to the first visible token. |
-| Decode speed | ≥ 25 tok/s | Median, over the same requests: completion tokens per second after the first visible token. |
+| TTFT | ≤ 800 ms at a 2K-token prompt | Median of `--perf-trials` (default 5) streamed requests of ~2,000 prompt tokens, with a fresh nonce at the start of the user turn. Measured at the client: time to the first generated token of any kind, reasoning included. The first visible token is reported beside it. These trials read LM Studio's stream directly, because the `LLMBackend` contract drops reasoning deltas. |
+| Decode speed | ≥ 25 tok/s | Median, over the same requests: completion tokens (reasoning included) per second after the first token. |
 | VRAM | ≤ 7.2 GB total | Read by hand on the desktop (`nvidia-smi`) and passed as `--vram-mb`. |
 
 The report also gives the planner step latency (p50/p95 of the graded turns). One step is roughly what a tool decision costs inside a voice request.
@@ -53,13 +53,13 @@ Paste the output into `bench/results/B5-<date>.md`, with the hardware (RTX 4060 
 
 To check the plumbing without the desktop, run `b5.py run --backend oracle --repeat 1`. It should score 50/50.
 
-Useful options: `--cases N01,I05,R01` to rerun a few cases, and `--repeat 1 --perf-trials 0` for a quick look.
+Useful options: `--cases N01,I05,R01` to rerun a few cases, `--repeat 1 --perf-trials 0` for a quick look, and `--no-eval` for the speed trials only.
 
 ## Rules for a valid run
 
 - One model loaded, nothing else using the GPU (no games, no video encode). A busy GPU shows up as slow TTFT, not as an error.
 - Don't change LM Studio's sampling settings between models without writing them in `--note`. ATLAS sends no temperature for planner calls, so the server's per-model default applies. Reader calls use temperature 0.
-- Thinking models: TTFT is time to the first *visible* token. Reasoning tokens count toward decode time and toward the orchestrator's 60 s request budget. A request that runs out of budget fails its case.
+- Thinking models (Gemma 4 E4B is one): reasoning tokens count toward TTFT, decode, and the orchestrator's 60 s request budget and 1,024-token per-call cap. A request that runs out of budget fails its case. The report shows the first visible token and the reasoning token count, because a voice answer can't start before the first visible token.
 - Runs are only comparable on the same case set. The report warns when the run files carry different `cases_digest` values.
 
 ## Matrix
