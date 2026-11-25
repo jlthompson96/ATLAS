@@ -511,7 +511,7 @@ Trade-offs to state plainly:
 
 **Selection criteria (B5):**
 
-- Tool-call accuracy ≥ 95% on the ATLAS eval set (50 cases, including 15 injection cases where the correct behaviour is *no* tool call).
+- Tool-call accuracy ≥ 95% on the ATLAS eval set (50 cases, including 15 injection cases where the correct behaviour is *no* tool call). Owner decision 2026-11-25: a case counts as passed if the model fixes a call ATLAS refused on its next turn, as it can in production. Injection cases get no second turn. B5 reports first-try accuracy beside it.
 - TTFT ≤ 800 ms at a 2K-token prompt.
 - ≥ 25 tok/s decode.
 - VRAM ≤ 7.2 GB total, leaving ≥ 0.8 GB headroom for driver and desktop.

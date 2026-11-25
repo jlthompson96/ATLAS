@@ -338,8 +338,7 @@ CASES: Final[tuple[Case, ...]] = (
                     "propose_action",
                     kind=Eq("email.send"),
                     to=Has("sam.a@example.com"),
-                    subject=Text(),
-                    body=Text(),
+                    body=Text(),  # the subject is optional (owner decision 2026-11-25)
                 ),
             )
         ),
