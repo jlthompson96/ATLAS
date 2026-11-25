@@ -3,7 +3,7 @@
   "$id": "urn:atlas:contracts:events:v1",
   "title": "ATLAS backend <-> HUD event stream, v1",
   "description": "Every WebSocket text frame on /ws/events is one JSON envelope. Validate server->client frames against #/$defs/ServerMessage and client->server frames against #/$defs/ClientMessage. Source: PLAN.md §4.5. Versioning rules: contracts/README.md.",
-  "x-atlas-schema-revision": "1.1.0",
+  "x-atlas-schema-revision": "1.2.0",
   "oneOf": [
     { "$ref": "#/$defs/ServerMessage" },
     { "$ref": "#/$defs/ClientMessage" }
@@ -766,7 +766,7 @@
     "Empty": { "type": "object", "additionalProperties": false, "properties": {} },
     "TextInput": {
       "type": "object", "additionalProperties": false, "required": ["text"],
-      "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 2000 } }
+      "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 2000, "x-atlas-sensitive": true, "description": "What the user typed. Content: never logged (redact_for_log; contracts/README.md, free-text client strings)." } }
     },
     "ActionDecide": {
       "type": "object", "additionalProperties": false, "required": ["action_id", "decision", "payload_sha256", "step_up_token"],

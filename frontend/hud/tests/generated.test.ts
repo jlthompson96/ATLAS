@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CLIENT_TYPES, SCHEMA_REVISION, SENSITIVE_KEYS, SERVER_TYPES, STATE_TRANSITIONS, StateValues } from '../src/lib/generated/events';
+import { redactForLog } from '../src/lib/protocol/messages';
 
 const ROOT = join(__dirname, '..');
 const schema = JSON.parse(readFileSync(join(ROOT, '../../contracts/events.v1.schema.json'), 'utf8')) as {
@@ -28,7 +29,13 @@ describe('generated event types', () => {
   });
 
   it('list the sensitive fields from the schema (never logged)', () => {
-    expect([...SENSITIVE_KEYS].sort()).toEqual(['passphrase', 'pin', 'step_up_token', 'token']);
+    expect([...SENSITIVE_KEYS].sort()).toEqual(['passphrase', 'pin', 'step_up_token', 'text', 'token']);
+  });
+
+  it('keeps what the user typed out of the console log (events.v1 1.2.0)', () => {
+    const frame = { v: 1, type: 'text.input', seq: 3, ts: 1, payload: { text: 'my private question' } };
+    expect(JSON.stringify(redactForLog(frame))).not.toContain('my private question');
+    expect(redactForLog(frame)).toEqual({ ...frame, payload: { text: '[REDACTED]' } });
   });
 
   it('is checked by `npm run lint`', () => {

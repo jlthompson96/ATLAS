@@ -4,7 +4,7 @@
 - **Author:** Claude Code session with the owner (found during the first live HUD run with a real model)
 - **Contract:** `contracts/events.v1.schema.json` (now 1.1.0), and the rules section of `contracts/README.md`
 - **Bump:** MINOR, to 1.2.0. Nothing changes on the wire, so every producer and consumer stays compatible. But conforming servers must now redact one more field, which is more than a wording change.
-- **Status:** Proposed
+- **Status:** Approved by the owner 2026-11-25, applied in events.v1 1.2.0 (with the logging fix recommended below)
 
 ## What
 
