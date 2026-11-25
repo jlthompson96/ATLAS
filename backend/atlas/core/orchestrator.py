@@ -33,7 +33,7 @@ from typing import Any, Final
 
 from atlas.audit.client import AuditError
 from atlas.core.auditing import AuditSink, tool_call_record
-from atlas.core.pending import ProposalFailed
+from atlas.core.pending import MAX_REFUSAL_DETAIL, ProposalFailed
 from atlas.core.prompt import PlannerContext, PromptPart, TrustedText, authored_texts, gen
 from atlas.core.registry import REGISTRY_BUILDERS, ToolRegistry
 from atlas.core.schema import SchemaError, collect_refs, strict_json_loads
@@ -387,7 +387,6 @@ class Orchestrator:
         return out
 
 
-MAX_DETAIL: Final = 120  # gen() takes values up to 128 characters
 _ERROR_PATH_RE: Final = re.compile(r"args\.([a-z_]{1,32})")
 
 
@@ -410,7 +409,7 @@ def schema_detail(errors: Sequence[str]) -> str:
             item = f"{match.group(1)}: a reference must be a whole value, not inside text"
         else:
             item = f"invalid {match.group(1)}"
-        if item not in out and len("; ".join([*out, item])) <= MAX_DETAIL:
+        if item not in out and len("; ".join([*out, item])) <= MAX_REFUSAL_DETAIL:
             out.append(item)
     return "; ".join(out)
 

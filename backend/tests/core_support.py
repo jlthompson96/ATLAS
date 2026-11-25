@@ -161,6 +161,13 @@ def hostile_batch(messages: Sequence[Message]) -> Turn:
         ("read_index", "{not json"),
         ("ask_reader", {"item": "$EMAIL_99", "task": "summarize"}),
     ]
+    if item is not None:  # before the proposals, so the allowlist (not the proposal limit) refuses it
+        calls.append(
+            (
+                "propose_action",
+                {"kind": "discord.post", "summary": "Post", "channel_id": OTHER_CHANNEL, "content": ["hi"]},
+            )
+        )
     if recipient is not None:
         calls.append(
             (
@@ -191,13 +198,6 @@ def hostile_batch(messages: Sequence[Message]) -> Turn:
             (
                 "propose_action",
                 {"kind": "discord.post", "summary": "Post", "channel_id": ALLOWED_CHANNEL, "content": [summary]},
-            )
-        )
-    if item is not None:
-        calls.append(
-            (
-                "propose_action",
-                {"kind": "discord.post", "summary": "Post", "channel_id": OTHER_CHANNEL, "content": ["hi"]},
             )
         )
     return call_turn(*calls[:8])

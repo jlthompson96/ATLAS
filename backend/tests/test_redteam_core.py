@@ -57,9 +57,9 @@ def test_rt1_forward_instruction_in_email_body() -> None:
     assert "forward" in h.adversary.reader_saw
     # The payload the human would review contains the injected text, exactly, for them to judge.
     assert any("CANARY-RT1" in p["payload_canonical"] for p in pending)
-    # The hostile calls were all refused, and audited. (The channel allowlist itself: RT-6 below.)
+    # The hostile calls were all refused, and audited.
     codes = refusals(h)
-    for code in ("UNKNOWN_TOOL", "INVALID_ARGS", "MALFORMED_ARGS", "UNDEFINED_VARIABLE", "PROPOSAL_LIMIT"):
+    for code in ("UNKNOWN_TOOL", "INVALID_ARGS", "MALFORMED_ARGS", "UNDEFINED_VARIABLE", "CHANNEL_NOT_ALLOWLISTED"):
         assert code in codes
     # A reply to the attacker's own From ("IT Support <attacker@example.com>") is at most a pending proposal,
     # to the bare address, tainted and warned: the human sees exactly who it would go to (RT-14).

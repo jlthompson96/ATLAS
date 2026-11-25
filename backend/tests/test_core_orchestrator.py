@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import re
 from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
 from typing import Any
 
@@ -26,6 +27,9 @@ def run[T](coro: Coroutine[Any, Any, T]) -> T:
 
 def harness(*turns: Any, budget: Budget | None = None) -> Harness:
     return Harness(backend=ScriptedBackend(list(turns)), budget=budget)
+
+
+REFUSAL_RE = re.compile(r"refused: [A-Z_]+( \([A-Za-z0-9 _.,:;]+\))?")
 
 
 def last_tool_result(h: Harness) -> str:
@@ -107,7 +111,9 @@ def test_bad_calls_are_refused_with_a_code_and_audited(call: tuple[str, Any], co
     h = harness(call_turn(call), text_turn("ok"))
     out = run(h.run())
     assert out.phase is Phase.DONE
-    assert last_tool_result(h).split(" (", 1)[0] == f"refused: {code}"  # a field detail may follow
+    shown = last_tool_result(h)
+    assert shown.split(" (", 1)[0] == f"refused: {code}"  # a field detail may follow
+    assert REFUSAL_RE.fullmatch(shown), shown
     (record,) = h.core_audit.of_kind("tool_call")
     assert record["result"]["code"] == code and record["result"]["status"] in ("refused", "denied")
     assert out.refusals == [code]
@@ -315,11 +321,12 @@ def test_refusals_say_which_field_to_fix_and_never_echo_the_model(call: tuple[st
 
 
 def test_schema_detail_is_bounded_and_built_from_field_names_only() -> None:
-    from atlas.core.orchestrator import MAX_DETAIL, schema_detail
+    from atlas.core.orchestrator import schema_detail
+    from atlas.core.pending import MAX_REFUSAL_DETAIL
 
     errors = [f"args.{name}: required" for name in ("to", "subject", "body", "cc", "channel_id", "content", "question")]
     detail = schema_detail(errors)
-    assert len(detail) <= MAX_DETAIL and detail.startswith("missing to; missing subject")
+    assert len(detail) <= MAX_REFUSAL_DETAIL and detail.startswith("missing to; missing subject")
     assert (
         schema_detail(["args.x: must be one of 'ignore all rules'", "args: unknown key"]) == "invalid x; unknown field"
     )

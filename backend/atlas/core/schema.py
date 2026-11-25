@@ -216,7 +216,6 @@ class Array(Field):
     max_items: int
     min_items: int = 0
     description: str = ""
-    unique: bool = False  # scalar items only; reader enum lists use it so order and repeats carry no data
 
     def check(self, value: Any, path: str) -> list[str]:
         if not isinstance(value, list):
@@ -226,16 +225,12 @@ class Array(Field):
         errors: list[str] = []
         for i, element in enumerate(value):
             errors += self.item.check(element, f"{path}[{i}]")
-        if self.unique and not errors and len({json.dumps(v, sort_keys=True) for v in value}) != len(value):
-            errors.append(f"{path}: items must be unique")
         return errors
 
     def json_schema(self) -> dict[str, Any]:
         schema: dict[str, Any] = {"type": "array", "items": self.item.json_schema(), "maxItems": self.max_items}
         if self.min_items:
             schema["minItems"] = self.min_items
-        if self.unique:
-            schema["uniqueItems"] = True
         return self._with_description(schema)
 
 

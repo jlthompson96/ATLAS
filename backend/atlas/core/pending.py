@@ -54,6 +54,9 @@ class EventSink(Protocol):
     async def emit(self, type_: str, payload: Mapping[str, Any]) -> None: ...
 
 
+MAX_REFUSAL_DETAIL: Final = 120  # shown to the planner through gen(), which takes values up to 128 characters
+
+
 class DraftError(Exception):
     """``code`` is UPPER_SNAKE; ``detail`` names fields only (ATLAS constants, never model text)."""
 
@@ -131,7 +134,7 @@ def draft_payload(args: Mapping[str, Any], store: VariableStore, channel_labels:
     if not required <= present or not present <= required | optional:
         problems = [f"{kind} needs {name}" for name in sorted(required - present)]
         problems += [f"{name} is not for {kind}" for name in sorted(present - required - optional)]
-        raise DraftError("INVALID_ARGS", "; ".join(problems)[:120])
+        raise DraftError("INVALID_ARGS", "; ".join(problems)[:MAX_REFUSAL_DETAIL])
     used: list[Provenance] = []
     has_refs = False
     payload: dict[str, Any]
@@ -142,10 +145,11 @@ def draft_payload(args: Mapping[str, Any], store: VariableStore, channel_labels:
             for entry in args.get(name, []):
                 text, from_var = _text_of(entry, store, used)
                 has_refs |= from_var
-                # A $VAR holds a header value ("Dana <dana@example.org>"); literal text must be a bare address.
-                address = mailbox_address(text) if from_var else text.strip()
+                # Only a $FROM_n (read_index's sender) holds a header value ("Dana <dana@example.org>"); every
+                # other $VAR and literal text must be a bare address: nothing else is interpreted (review S2).
+                address = mailbox_address(text) if entry.startswith("$FROM_") else text.strip()
                 if address is None or not valid_email(address):
-                    raise DraftError("INVALID_RECIPIENT", f"{name}: not one email address")
+                    raise DraftError("INVALID_RECIPIENT", "not one email address")
                 recipients[name].append(Recipient(address, from_var))
         subject, from_var = _text_of(args["subject"], store, used)
         has_refs |= from_var
