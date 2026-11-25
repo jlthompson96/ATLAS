@@ -74,7 +74,7 @@ PROPOSE_ARGS: Final = Obj(
         "summary": PlainText(200, min_len=1, single_line=True, description="One line for the approval card."),
         "to": Array(RefOr(_EMAIL_TEXT), max_items=10, description="email.send (required): addresses or $VAR names."),
         "cc": Array(RefOr(_EMAIL_TEXT), max_items=10, description="email.send (optional)."),
-        "subject": RefOr(PlainText(200, single_line=True), description="email.send (required)."),
+        "subject": RefOr(PlainText(200, single_line=True), description="email.send (optional; empty if left out)."),
         "body": Array(
             RefOr(PlainText(4000)),
             max_items=MAX_PARTS,
@@ -100,7 +100,7 @@ PROPOSE_ARGS: Final = Obj(
 )
 
 _KIND_FIELDS: Final[dict[str, tuple[frozenset[str], frozenset[str]]]] = {
-    "email.send": (frozenset({"to", "subject", "body"}), frozenset({"cc", "in_reply_to"})),
+    "email.send": (frozenset({"to", "body"}), frozenset({"cc", "subject", "in_reply_to"})),
     "discord.post": (frozenset({"channel_id", "content"}), frozenset()),
     "research.schedule": (frozenset({"question", "every_minutes"}), frozenset()),
 }
@@ -151,7 +151,7 @@ def draft_payload(args: Mapping[str, Any], store: VariableStore, channel_labels:
                 if address is None or not valid_email(address):
                     raise DraftError("INVALID_RECIPIENT", "not one email address")
                 recipients[name].append(Recipient(address, from_var))
-        subject, from_var = _text_of(args["subject"], store, used)
+        subject, from_var = _text_of(args.get("subject", ""), store, used)  # optional: "" is a valid subject
         has_refs |= from_var
         subject = " ".join(display_clean(subject).split())[:200]
         body_parts: list[str] = []

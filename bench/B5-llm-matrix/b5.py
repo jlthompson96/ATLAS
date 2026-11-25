@@ -112,6 +112,10 @@ class EvalBackend(LLMBackend):
     ``grade`` is "planner" (the first planner call after ``prefix`` runs out) or "reader" (the first
     reader call). Reader calls that are not graded get ``reader_script`` outputs in order, then the
     simplest schema-valid value.
+
+    ``corrections`` (planner only, 0 or 1): if ATLAS refused any call of the graded turn, the model's
+    next turn, which sees the refusal as production would, goes to ``live`` too and is captured as
+    ``retry``.
     """
 
     def __init__(
@@ -123,8 +127,11 @@ class EvalBackend(LLMBackend):
         prefix: Sequence[Turn] = (),
         reader_script: Sequence[Mapping[str, Any]] = (),
         max_ctx: int = 16_384,
+        corrections: int = 0,
     ) -> None:
         self._live = live
+        self._corrections = corrections
+        self.retry: Capture | None = None
         self._grade = grade
         self._audit = audit
         self._prefix = list(prefix)
@@ -164,7 +171,7 @@ class EvalBackend(LLMBackend):
         elif self._prefix:
             graded, turn = False, self._prefix.pop(0)
         else:
-            graded = self._grade == "planner" and self.capture is None
+            graded = self._grade == "planner" and (self.capture is None or self._retry_due())
             turn = text_turn("(B5: end of the graded step)")
         if graded:
             async for delta in self._captured(messages, max_tokens, tools, response_schema, deadline):
@@ -172,6 +179,11 @@ class EvalBackend(LLMBackend):
             return
         for delta in turn:
             yield delta
+
+    def _retry_due(self) -> bool:
+        if self.capture is None or self.retry is not None or self._corrections < 1:
+            return False
+        return bool(_refusals(self._audit.records[self.capture.audit_mark :]))
 
     async def _captured(
         self,
@@ -182,7 +194,10 @@ class EvalBackend(LLMBackend):
         deadline: float | None,
     ) -> AsyncIterator[Delta]:
         cap = Capture(time.monotonic(), len(self._audit.records))
-        self.capture = cap
+        if self.capture is None:
+            self.capture = cap
+        else:
+            self.retry = cap
         try:
             async for delta in self._live.chat(
                 messages, max_tokens=max_tokens, tools=tools, response_schema=response_schema, deadline=deadline
@@ -241,6 +256,9 @@ class CaseResult:
     completion_tokens: int | None = None
     calls: list[dict[str, str]] = field(default_factory=list)  # name + args (fake data only), truncated
     text_chars: int = 0
+    first_passed: bool | None = None  # the first attempt alone; ``passed`` counts one self-correction
+    retried: bool = False
+    retry_latency_ms: int | None = None
 
 
 def _runtime(backend: LLMBackend, audit: RecordingAuditSink) -> CoreRuntime:
@@ -303,7 +321,20 @@ def _summarize_calls(calls: Sequence[ToolCall]) -> list[dict[str, str]]:
     return [{"name": c.name[:64], "args": c.arguments_json[:400]} for c in calls[:8]]
 
 
-async def run_planner_case(case: Case, live: LLMBackend, rep: int) -> CaseResult:
+def grade_turn(case: Case, cap: Capture, refusals: Sequence[str]) -> list[str]:
+    """One captured planner turn against the case; ``refusals`` are ATLAS's refusals of its calls."""
+    if cap.error is not None:
+        return [f"backend error {cap.error}"]
+    if isinstance(case.expect, Calls):
+        return grade_calls(case.expect, cap.calls) + [f"refused at dispatch: {r}" for r in refusals]
+    if isinstance(case.expect, Answer):
+        return grade_answer(case.expect, cap.text, cap.calls)
+    raise SetupError(f"{case.id}: a planner case needs Calls or Answer")
+
+
+async def run_planner_case(case: Case, live: LLMBackend, rep: int, corrections: int = 0) -> CaseResult:
+    """``corrections``: 1 lets the model fix a refused call once, as in production. Never for injection
+    cases, where any tool call fails the case."""
     audit = RecordingAuditSink("atlas-core")
     ev = EvalBackend(
         live,
@@ -312,6 +343,7 @@ async def run_planner_case(case: Case, live: LLMBackend, rep: int) -> CaseResult
         prefix=prefix_turns(case),
         reader_script=case.reader_script,
         max_ctx=live.capabilities().max_ctx,
+        corrections=0 if case.injection else corrections,
     )
     runtime = _runtime(ev, audit)
     try:
@@ -322,42 +354,42 @@ async def run_planner_case(case: Case, live: LLMBackend, rep: int) -> CaseResult
         outcome = await asyncio.wait_for(runtime.orchestrator.handle(case.user, store=runtime.store), CASE_TIMEOUT_S)
     finally:
         runtime.memory.close()
-    cap = ev.capture
+    cap, retry = ev.capture, ev.retry
     if cap is None:
         raise SetupError(f"{case.id}: the graded step was never reached ({outcome.phase.value}: {outcome.code})")
     setup_refusals = _refusals(audit.records[: cap.audit_mark])
     if setup_refusals:
         raise SetupError(f"{case.id}: scripted steps were refused: {setup_refusals}")
-    result = CaseResult(
+    first_end = retry.audit_mark if retry is not None else len(audit.records)
+    reasons = grade_turn(case, cap, _refusals(audit.records[cap.audit_mark : first_end]))
+    final = retry if retry is not None else cap
+    final_reasons = reasons
+    if retry is not None:
+        retry_reasons = grade_turn(case, retry, _refusals(audit.records[retry.audit_mark :]))
+        final_reasons = [f"after correction: {r}" for r in retry_reasons]
+    ended = []
+    if outcome.code in ("DEADLINE", "TAINT_LEAK", "INTERNAL", "AUDIT_UNAVAILABLE"):
+        ended.append(f"request ended {outcome.phase.value}: {outcome.code}")
+    elif isinstance(case.expect, Answer) and not final.calls and outcome.phase is not Phase.DONE:
+        ended.append(f"request ended {outcome.phase.value}")
+    passed = not final_reasons and not ended
+    return CaseResult(
         case.id,
         rep,
         case.injection,
         case.kind,
-        False,
-        [],
+        passed,
+        ended + (reasons if retry is None else reasons + final_reasons),
         latency_ms=_ms(cap.started, cap.ended),
         ttft_ms=_ms(cap.started, cap.first),
         prompt_tokens=cap.usage.prompt_tokens if cap.usage else None,
         completion_tokens=cap.usage.completion_tokens if cap.usage else None,
-        calls=_summarize_calls(cap.calls),
+        calls=_summarize_calls(cap.calls + (retry.calls if retry is not None else [])),
         text_chars=len(cap.text),
+        first_passed=not reasons and not ended,
+        retried=retry is not None,
+        retry_latency_ms=_ms(retry.started, retry.ended) if retry is not None else None,
     )
-    if cap.error is not None:
-        result.reasons = [f"backend error {cap.error}"]
-        return result
-    if outcome.code in ("DEADLINE", "TAINT_LEAK", "INTERNAL", "AUDIT_UNAVAILABLE"):
-        result.reasons.append(f"request ended {outcome.phase.value}: {outcome.code}")
-    if isinstance(case.expect, Calls):
-        result.reasons += grade_calls(case.expect, cap.calls)
-        result.reasons += [f"refused at dispatch: {r}" for r in _refusals(audit.records[cap.audit_mark :])]
-    elif isinstance(case.expect, Answer):
-        result.reasons += grade_answer(case.expect, cap.text, cap.calls)
-        if not cap.calls and outcome.phase is not Phase.DONE:
-            result.reasons.append(f"request ended {outcome.phase.value}")
-    else:
-        raise SetupError(f"{case.id}: a planner case needs Calls or Answer")
-    result.passed = not result.reasons
-    return result
 
 
 async def run_reader_case(case: Case, live: LLMBackend, rep: int) -> CaseResult:
@@ -401,10 +433,10 @@ async def run_reader_case(case: Case, live: LLMBackend, rep: int) -> CaseResult:
     )
 
 
-async def run_case(case: Case, live: LLMBackend, rep: int = 0) -> CaseResult:
+async def run_case(case: Case, live: LLMBackend, rep: int = 0, corrections: int = 0) -> CaseResult:
     if case.kind == "reader":
         return await run_reader_case(case, live, rep)
-    return await run_planner_case(case, live, rep)
+    return await run_planner_case(case, live, rep, corrections)
 
 
 def _ms(start: float, end: float | None) -> int | None:
@@ -610,6 +642,7 @@ def summarize(run: Mapping[str, Any]) -> dict[str, Any]:
     results = run["cases"]
     total = len(results)
     passed = sum(1 for r in results if r["passed"])
+    first = sum(1 for r in results if (r["passed"] if r.get("first_passed") is None else r["first_passed"]))
     inj = [r for r in results if r["injection"]]
     normal = [r for r in results if not r["injection"]]
     perf = [p for p in run.get("perf", []) if p.get("error") is None]
@@ -633,6 +666,7 @@ def summarize(run: Mapping[str, Any]) -> dict[str, Any]:
         "total": total,
         "passed": passed,
         "accuracy": accuracy,
+        "first_try": first,
         "normal": (sum(r["passed"] for r in normal), len(normal)),
         "injection": (sum(r["passed"] for r in inj), len(inj)),
         "ttft_p50": ttft_p50,
@@ -663,9 +697,9 @@ def _mark(ok: bool | None) -> str:
 
 def report(runs: Sequence[Mapping[str, Any]]) -> str:
     lines = [
-        "| Model | Quant | Ctx | Tool-call accuracy | Normal | Injection | TTFT p50 / p95 (prompt) | "
+        "| Model | Quant | Ctx | Tool-call accuracy | First try | Normal | Injection | TTFT p50 / p95 (prompt) | "
         "First visible p50 (reasoning tok) | Decode p50 | Planner step p50 / p95 | VRAM | Verdict |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for run in runs:
         s = summarize(run)
@@ -674,8 +708,9 @@ def report(runs: Sequence[Mapping[str, Any]]) -> str:
         verdict = "meets B5" if s["meets"] else "misses: " + ", ".join(f"{k} ({_mark(s['checks'][k])})" for k in misses)
         effort = f" (reasoning_effort {m['reasoning_effort']})" if m.get("reasoning_effort") else ""
         acc = "n/a" if s["accuracy"] is None else f"{s['passed']}/{s['total']} ({s['accuracy']:.0%})"
+        first = "n/a" if not s["total"] else f"{s['first_try']}/{s['total']} ({s['first_try'] / s['total']:.0%})"
         lines.append(
-            f"| `{m.get('id', '?')}`{effort} | {m.get('quantization') or 'n/a'} | {_fmt(m.get('context'))} | {acc} | "
+            f"| `{m.get('id', '?')}`{effort} | {m.get('quantization') or 'n/a'} | {_fmt(m.get('context'))} | {acc} | {first} | "
             f"{s['normal'][0]}/{s['normal'][1]} | {s['injection'][0]}/{s['injection'][1]} | "
             f"{_fmt(s['ttft_p50'], ' ms')} / {_fmt(s['ttft_p95'], ' ms')} ({_fmt(s['prompt_tokens'])} tok) | "
             f"{_fmt(s['visible_p50'], ' ms')} ({s['reasoning']}) | {_fmt(s['tps_p50'], ' tok/s')} | {_fmt(s['step_p50'], ' ms')} / {_fmt(s['step_p95'], ' ms')} | "
@@ -683,7 +718,9 @@ def report(runs: Sequence[Mapping[str, Any]]) -> str:
         )
     lines += [
         "",
-        f"Criteria (PLAN.md §2.8): accuracy ≥ {MIN_ACCURACY:.0%} over every graded attempt; TTFT p50 ≤ "
+        f"Criteria (PLAN.md §2.8): accuracy ≥ {MIN_ACCURACY:.0%} over every graded case, counting one "
+        "self-correction after an ATLAS refusal when the run allows it (never for injection cases; "
+        "the first-try figure is beside it); TTFT p50 ≤ "
         f"{MAX_TTFT_MS:.0f} ms at a ~{PERF_PROMPT_TOKENS}-token prompt (first token of any kind, reasoning included; "
         f"the first visible token is reported beside it); decode p50 ≥ {MIN_DECODE_TPS:.0f} tok/s; "
         f"VRAM ≤ {MAX_VRAM_MB} MB in total (read from nvidia-smi on the desktop).",
@@ -738,6 +775,7 @@ async def run_all(args: argparse.Namespace, out: Any) -> dict[str, Any]:
         "started": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "harness": {
             "cases_digest": cases_digest(),
+            "corrections": args.corrections,
             "atlas": atlas_revision(),
             "repeat": 0 if args.no_eval else args.repeat,
             "cases": 0 if args.no_eval else len(selected),
@@ -750,7 +788,7 @@ async def run_all(args: argparse.Namespace, out: Any) -> dict[str, Any]:
         results = []
         for case in selected:
             for rep in range(args.repeat):
-                results.append(await run_case(case, oracle_backend(case), rep))
+                results.append(await run_case(case, oracle_backend(case), rep, args.corrections))
         run["cases"] = [asdict(r) for r in results]
         run["perf"] = []
         return run
@@ -779,7 +817,7 @@ async def run_all(args: argparse.Namespace, out: Any) -> dict[str, Any]:
     results = []
     for rep in range(0 if args.no_eval else args.repeat):
         for case in selected:
-            result = await run_case(case, live, rep)
+            result = await run_case(case, live, rep, args.corrections)
             mark = "ok  " if result.passed else "FAIL"
             why = "" if result.passed else " - " + "; ".join(result.reasons)[:160]
             print(f"{mark} {case.id} r{rep} {result.latency_ms} ms{why}", file=out)
@@ -814,6 +852,13 @@ def main(argv: Sequence[str] | None = None, out: Any = sys.stdout) -> int:
     p_run.add_argument("--repeat", type=int, default=3, help="passes over the case set (default 3)")
     p_run.add_argument("--perf-trials", type=int, default=5)
     p_run.add_argument("--no-eval", action="store_true", help="only the TTFT/decode trials")
+    p_run.add_argument(
+        "--corrections",
+        type=int,
+        choices=(0, 1),
+        default=1,
+        help="1 (default): a refused call may be fixed once, as in production (never for injection cases)",
+    )
     p_run.add_argument("--cases", type=lambda s: [x.strip() for x in s.split(",") if x.strip()], default=[])
     p_run.add_argument("--vram-mb", type=int, help="total GPU memory used with the model loaded (nvidia-smi)")
     p_run.add_argument("--note", help="free text for the report (LM Studio version, settings)")

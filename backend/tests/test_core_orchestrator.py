@@ -297,8 +297,8 @@ def test_terminal_escapes_are_neutralized() -> None:
 @pytest.mark.parametrize(
     ("call", "shown"),
     [
-        (("propose_action", {"kind": "email.send", "summary": "x", "to": ["a@example.com"], "body": ["b"]}),
-         "refused: INVALID_ARGS (email.send needs subject)"),
+        (("propose_action", {"kind": "email.send", "summary": "x", "to": ["a@example.com"], "subject": "s"}),
+         "refused: INVALID_ARGS (email.send needs body)"),
         (("propose_action", {"kind": "research.schedule", "summary": "x", "question": "q"}),
          "refused: INVALID_ARGS (research.schedule needs every_minutes)"),
         (("propose_action", {"kind": "email.send", "summary": "x", "to": ["a@example.com"], "subject": "s", "body": ["b"], "channel_id": "110000000000000055"}),
@@ -331,3 +331,12 @@ def test_schema_detail_is_bounded_and_built_from_field_names_only() -> None:
         schema_detail(["args.x: must be one of 'ignore all rules'", "args: unknown key"]) == "invalid x; unknown field"
     )
     assert schema_detail(["weird"]) == "arguments malformed"
+
+
+def test_email_without_a_subject_is_proposed_with_an_empty_one() -> None:
+    """Owner decision 2026-11-25 (B5): the subject is optional; the approval card shows the empty field."""
+    args = {"kind": "email.send", "summary": "Late", "to": ["dana@example.org"], "body": ["Ten minutes late."]}
+    h = harness(call_turn(("propose_action", args)), text_turn("ok"))
+    run(h.run())
+    (action,) = h.runtime.pending.all()
+    assert json.loads(action.payload_canonical)["subject"] == ""

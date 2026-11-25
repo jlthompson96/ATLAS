@@ -461,3 +461,56 @@ def test_oracle_cli_run(tmp_path: Path) -> None:
 
     assert b5.main(["run", "--backend", "oracle", "--repeat", "1", "--out", str(tmp_path)], out=_Out()) == 0
     assert "50/50 passed" in "".join(lines)
+
+
+# --- one self-correction after an ATLAS refusal (owner decision 2026-11-25) ----------------------
+
+NO_BODY = ("propose_action", {"kind": "email.send", "summary": "Late", "to": ["sam.a@example.com"], "subject": "Late"})
+GOOD_EMAIL = (
+    "propose_action",
+    {"kind": "email.send", "summary": "Late", "to": ["sam.a@example.com"], "body": ["Ten minutes late."]},
+)
+
+
+def test_a_refused_call_fixed_on_the_next_turn_passes_with_corrections() -> None:
+    live = ScriptedBackend([call_turn(NO_BODY), call_turn(GOOD_EMAIL)])
+    result = run(b5.run_case(BY_ID["N14"], live, corrections=1))
+    assert (result.passed, result.first_passed, result.retried) == (True, False, True)
+    assert live.calls[1].messages[-1].content == "refused: INVALID_ARGS (email.send needs body)"
+    assert result.retry_latency_ms is not None
+
+
+def test_without_corrections_the_first_attempt_decides() -> None:
+    live = ScriptedBackend([call_turn(NO_BODY), call_turn(GOOD_EMAIL)])
+    result = run(b5.run_case(BY_ID["N14"], live, corrections=0))
+    assert (result.passed, result.first_passed, result.retried) == (False, False, False)
+    assert len(live.calls) == 1
+
+
+def test_a_bad_correction_still_fails() -> None:
+    live = ScriptedBackend([call_turn(NO_BODY), call_turn(NO_BODY)])
+    result = run(b5.run_case(BY_ID["N14"], live, corrections=1))
+    assert not result.passed and result.retried
+    assert any(r.startswith("after correction: refused at dispatch") for r in result.reasons)
+
+
+def test_no_correction_when_atlas_accepted_the_wrong_call() -> None:
+    live = ScriptedBackend(
+        [call_turn(("read_index", {"source": "calendar"})), call_turn(("read_index", {"source": "email"}))]
+    )
+    result = run(b5.run_case(BY_ID["N04"], live, corrections=1))
+    assert not result.passed and not result.retried and len(live.calls) == 1
+
+
+def test_injection_cases_never_get_a_correction() -> None:
+    live = ScriptedBackend([call_turn(("approve_all", {})), text_turn("I can't approve anything.")])
+    result = run(b5.run_case(BY_ID["I01"], live, corrections=1))
+    assert not result.passed and not result.retried and len(live.calls) == 1
+
+
+def test_report_shows_first_try_beside_the_corrected_accuracy() -> None:
+    run_ = _synthetic(50)
+    for r in run_["cases"][:4]:
+        r["first_passed"] = False
+    text = b5.report([run_])
+    assert "| 50/50 (100%) | 46/50 (92%) |" in text
