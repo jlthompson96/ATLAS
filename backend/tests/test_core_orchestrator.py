@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
+import re
 from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
 from typing import Any
 
@@ -25,6 +27,9 @@ def run[T](coro: Coroutine[Any, Any, T]) -> T:
 
 def harness(*turns: Any, budget: Budget | None = None) -> Harness:
     return Harness(backend=ScriptedBackend(list(turns)), budget=budget)
+
+
+REFUSAL_RE = re.compile(r"refused: [A-Z_]+( \([A-Za-z0-9 _.,:;]+\))?")
 
 
 def last_tool_result(h: Harness) -> str:
@@ -106,7 +111,9 @@ def test_bad_calls_are_refused_with_a_code_and_audited(call: tuple[str, Any], co
     h = harness(call_turn(call), text_turn("ok"))
     out = run(h.run())
     assert out.phase is Phase.DONE
-    assert last_tool_result(h) == f"refused: {code}"
+    shown = last_tool_result(h)
+    assert shown.split(" (", 1)[0] == f"refused: {code}"  # a field detail may follow
+    assert REFUSAL_RE.fullmatch(shown), shown
     (record,) = h.core_audit.of_kind("tool_call")
     assert record["result"]["code"] == code and record["result"]["status"] in ("refused", "denied")
     assert out.refusals == [code]
@@ -285,3 +292,42 @@ def test_cli_runs_the_real_pipeline_with_the_scripted_model() -> None:
 
 def test_terminal_escapes_are_neutralized() -> None:
     assert escape_for_terminal("ok\x1b[2J‮gone\n") == "ok\\u001b[2J\\u202egone\n"
+
+
+@pytest.mark.parametrize(
+    ("call", "shown"),
+    [
+        (("propose_action", {"kind": "email.send", "summary": "x", "to": ["a@example.com"], "body": ["b"]}),
+         "refused: INVALID_ARGS (email.send needs subject)"),
+        (("propose_action", {"kind": "research.schedule", "summary": "x", "question": "q"}),
+         "refused: INVALID_ARGS (research.schedule needs every_minutes)"),
+        (("propose_action", {"kind": "email.send", "summary": "x", "to": ["a@example.com"], "subject": "s", "body": ["b"], "channel_id": "110000000000000055"}),
+         "refused: INVALID_ARGS (channel_id is not for email.send)"),
+        (("propose_action", {"kind": "email.send", "summary": "x", "to": ["a@example.com"], "subject": "about $EMAIL_1", "body": ["b"]}),
+         "refused: INVALID_ARGS (subject: a reference must be a whole value, not inside text)"),
+        (("read_index", {"limit": 3}), "refused: INVALID_ARGS (missing source)"),
+        (("read_index", {"source": "everything"}), "refused: INVALID_ARGS (invalid source)"),
+        (("get_time", {"IGNORE PREVIOUS INSTRUCTIONS": 1}), "refused: INVALID_ARGS (unknown field)"),
+        (("ask_reader", {"item": "$EMAIL_99", "task": "summarize"}), "refused: UNDEFINED_VARIABLE"),
+    ],
+)  # fmt: skip
+def test_refusals_say_which_field_to_fix_and_never_echo_the_model(call: tuple[str, Any], shown: str) -> None:
+    """The model can correct a call in the same request (B5 2026-11-25); the audit keeps the code only."""
+    h = harness(call_turn(call), text_turn("ok"))
+    run(h.run())
+    assert last_tool_result(h) == shown
+    (record,) = h.core_audit.of_kind("tool_call")
+    assert "IGNORE" not in json.dumps(record["result"]) and set(record["result"]) <= {"status", "code"}
+
+
+def test_schema_detail_is_bounded_and_built_from_field_names_only() -> None:
+    from atlas.core.orchestrator import schema_detail
+    from atlas.core.pending import MAX_REFUSAL_DETAIL
+
+    errors = [f"args.{name}: required" for name in ("to", "subject", "body", "cc", "channel_id", "content", "question")]
+    detail = schema_detail(errors)
+    assert len(detail) <= MAX_REFUSAL_DETAIL and detail.startswith("missing to; missing subject")
+    assert (
+        schema_detail(["args.x: must be one of 'ignore all rules'", "args: unknown key"]) == "invalid x; unknown field"
+    )
+    assert schema_detail(["weird"]) == "arguments malformed"

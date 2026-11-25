@@ -12,14 +12,11 @@ configured, the planner sees that contact's name (a choice from the user's own l
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import Final
 
 from atlas.core.taint import SourceKind, UntrustedContent
-from atlas.policy.payloads import normalize_address, valid_email
-
-_ANGLE: Final = re.compile(r"<([^<>\s]{3,254})>\s*$")
+from atlas.policy.payloads import mailbox_address, normalize_address
 
 
 class ItemIndex:
@@ -56,9 +53,7 @@ class ItemIndex:
         """The configured contact name if the claimed sender address matches one exactly."""
         if item.sender is None or not self._contacts:
             return None
-        raw = item.sender._reveal().strip()
-        match = _ANGLE.search(raw)
-        address = match.group(1) if match else raw
-        if not valid_email(address):
+        address = mailbox_address(item.sender._reveal())
+        if address is None:
             return None
         return self._contacts.get(normalize_address(address))

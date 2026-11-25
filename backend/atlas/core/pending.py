@@ -37,6 +37,7 @@ from atlas.policy.payloads import (
     PROPOSABLE_KINDS,
     canonical_text,
     display_clean,
+    mailbox_address,
     payload_sha256,
     valid_email,
     validate_payload,
@@ -53,10 +54,16 @@ class EventSink(Protocol):
     async def emit(self, type_: str, payload: Mapping[str, Any]) -> None: ...
 
 
+MAX_REFUSAL_DETAIL: Final = 120  # shown to the planner through gen(), which takes values up to 128 characters
+
+
 class DraftError(Exception):
-    def __init__(self, code: str) -> None:
+    """``code`` is UPPER_SNAKE; ``detail`` names fields only (ATLAS constants, never model text)."""
+
+    def __init__(self, code: str, detail: str = "") -> None:
         super().__init__(code)
         self.code = code
+        self.detail = detail
 
 
 _EMAIL_TEXT = PlainText(254, pattern=EMAIL_RE.pattern, single_line=True)
@@ -123,9 +130,11 @@ def _text_of(value: str, store: VariableStore, used: list[Provenance]) -> tuple[
 def draft_payload(args: Mapping[str, Any], store: VariableStore, channel_labels: Mapping[str, str]) -> Draft:
     kind = args["kind"]
     required, optional = _KIND_FIELDS[kind]
-    present = set(args) - {"kind", "summary"}
+    present = set(args) - {"kind", "summary"}  # all declared PROPOSE_ARGS fields: the schema ran first
     if not required <= present or not present <= required | optional:
-        raise DraftError("INVALID_ARGS")
+        problems = [f"{kind} needs {name}" for name in sorted(required - present)]
+        problems += [f"{name} is not for {kind}" for name in sorted(present - required - optional)]
+        raise DraftError("INVALID_ARGS", "; ".join(problems)[:MAX_REFUSAL_DETAIL])
     used: list[Provenance] = []
     has_refs = False
     payload: dict[str, Any]
@@ -136,9 +145,11 @@ def draft_payload(args: Mapping[str, Any], store: VariableStore, channel_labels:
             for entry in args.get(name, []):
                 text, from_var = _text_of(entry, store, used)
                 has_refs |= from_var
-                address = text.strip()
-                if not valid_email(address):
-                    raise DraftError("INVALID_RECIPIENT")
+                # Only a $FROM_n (read_index's sender) holds a header value ("Dana <dana@example.org>"); every
+                # other $VAR and literal text must be a bare address: nothing else is interpreted (review S2).
+                address = mailbox_address(text) if entry.startswith("$FROM_") else text.strip()
+                if address is None or not valid_email(address):
+                    raise DraftError("INVALID_RECIPIENT", "not one email address")
                 recipients[name].append(Recipient(address, from_var))
         subject, from_var = _text_of(args["subject"], store, used)
         has_refs |= from_var

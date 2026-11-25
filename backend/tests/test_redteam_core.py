@@ -61,6 +61,11 @@ def test_rt1_forward_instruction_in_email_body() -> None:
     codes = refusals(h)
     for code in ("UNKNOWN_TOOL", "INVALID_ARGS", "MALFORMED_ARGS", "UNDEFINED_VARIABLE", "CHANNEL_NOT_ALLOWLISTED"):
         assert code in codes
+    # A reply to the attacker's own From ("IT Support <attacker@example.com>") is at most a pending proposal,
+    # to the bare address, tainted and warned: the human sees exactly who it would go to (RT-14).
+    (reply,) = [p for p in pending if p["summary"] == "Reply"]
+    assert json.loads(reply["payload_canonical"])["to"] == ["attacker@example.com"]
+    assert {"tainted_args", "not_on_allowlist", "new_recipient"} <= set(reply["warnings"])
 
 
 def test_rt1_colluding_planner_typing_the_attacker_address_gets_warnings_not_a_send() -> None:

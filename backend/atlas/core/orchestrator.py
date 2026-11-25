@@ -33,7 +33,7 @@ from typing import Any, Final
 
 from atlas.audit.client import AuditError
 from atlas.core.auditing import AuditSink, tool_call_record
-from atlas.core.pending import ProposalFailed
+from atlas.core.pending import MAX_REFUSAL_DETAIL, ProposalFailed
 from atlas.core.prompt import PlannerContext, PromptPart, TrustedText, authored_texts, gen
 from atlas.core.registry import REGISTRY_BUILDERS, ToolRegistry
 from atlas.core.schema import SchemaError, collect_refs, strict_json_loads
@@ -296,13 +296,22 @@ class Orchestrator:
             rc.tokens += (sum(len(m.content) for m in messages) + len(out)) // 4 + 1
         return out, calls
 
-    async def _refuse(self, rc: RequestCtx, tool: str, args: Mapping[str, Any], code: str, status: str) -> ToolOutput:
+    async def _refuse(
+        self, rc: RequestCtx, tool: str, args: Mapping[str, Any], code: str, status: str, detail: str = ""
+    ) -> ToolOutput:
         await self._audit.append(
             tool_call_record(
                 context=rc.context, correlation_id=rc.correlation_id, tool=tool, args=args, status=status, code=code
             )
         )
-        return text_output(gen("refused: {code}", code=code), status=status, code=code)
+        if detail:
+            try:
+                text = gen("refused: {code} ({detail})", code=code, detail=detail)
+            except TypeError:  # not plain enough for gen(): leave it out rather than fail the request
+                text = gen("refused: {code}", code=code)
+        else:
+            text = gen("refused: {code}", code=code)
+        return text_output(text, status=status, code=code)
 
     async def _dispatch(self, call: ToolCall, registry: ToolRegistry, rc: RequestCtx) -> ToolOutput:
         tool = registry.get(call.name)
@@ -321,15 +330,15 @@ class Orchestrator:
             return await self._refuse(rc, tool.name, {}, "MALFORMED_ARGS", "refused")
         try:
             tool.args.validate(args)
-        except SchemaError:
-            return await self._refuse(rc, tool.name, args, "INVALID_ARGS", "refused")
+        except SchemaError as exc:
+            return await self._refuse(rc, tool.name, args, "INVALID_ARGS", "refused", schema_detail(exc.errors))
         # Whatever happens next (including a refusal that reveals something about a $VAR, such as
         # INVALID_RECIPIENT), the planner's next step now depends on the referenced values (review F6).
         rc.influence = rc.influence.union(*self._referenced_provenance(args, rc))
         try:
             prepared = tool.prepare(args, rc)
         except ToolError as exc:
-            return await self._refuse(rc, tool.name, args, exc.code, "refused")
+            return await self._refuse(rc, tool.name, args, exc.code, "refused", exc.detail)
         decision = decide(
             PolicyInput(
                 context=rc.context,
@@ -376,6 +385,33 @@ class Orchestrator:
             if var is not None:
                 out.append(var.provenance)
         return out
+
+
+_ERROR_PATH_RE: Final = re.compile(r"args\.([a-z_]{1,32})")
+
+
+def schema_detail(errors: Sequence[str]) -> str:
+    """What was wrong with a tool call's arguments, by field name only.
+
+    Error paths are built from the schema's own field names (an undeclared key is reported as "args:
+    unknown key", never by its name), and the messages are reduced to three fixed words, so nothing the
+    model wrote comes back to it.
+    """
+    out: list[str] = []
+    for error in errors:
+        path, _, message = error.partition(": ")
+        match = _ERROR_PATH_RE.match(path)
+        if match is None:
+            item = "unknown field" if message == "unknown key" else "arguments malformed"
+        elif message == "required":
+            item = f"missing {match.group(1)}"
+        elif "embeds a variable reference" in message:
+            item = f"{match.group(1)}: a reference must be a whole value, not inside text"
+        else:
+            item = f"invalid {match.group(1)}"
+        if item not in out and len("; ".join([*out, item])) <= MAX_REFUSAL_DETAIL:
+            out.append(item)
+    return "; ".join(out)
 
 
 def _normalize_ids(calls: Sequence[ToolCall]) -> list[ToolCall]:
