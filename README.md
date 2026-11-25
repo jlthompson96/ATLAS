@@ -39,7 +39,7 @@ the Pi is provisioned and runs the audit log and the egress proxy.**
   - Chat with your own model from a terminal, or through the HUD in a browser, with every request going through the policy engine.
   - Approve a proposed action with a PIN.
 - **Tested so far:**
-  - About 1,500 backend tests, on the Mac and again on Python 3.13 in an ARM64 Debian VM (a few run on only one of the two).
+  - About 1,700 backend tests, on the Mac and again on Python 3.13 in an ARM64 Debian VM (a few run on only one of the two).
   - The VM also gets the same provisioning and deploy as the Pi. Egress test PT-1 passes there, the audit log survives hard power cuts, and a release that crash-loops is rolled back automatically.
   - The nightly backup ([restic to two rotated USB drives](docs/runbooks/backup.md)) backs up, restores and refuses unknown or doubled drives in the VM. On the Pi it's installed but off: no backup drive for now, and its password has to be set at the Pi's console (no display yet).
   - The [WireGuard link](docs/runbooks/wireguard.md), Pi side: in the VM, only `atlas-core` reaches the fake desktop's LM Studio and `atlas-hostd` ports under the real firewall. The Windows side (WireGuard for Windows and a firewall script) is untested until the desktop.
@@ -256,6 +256,7 @@ works as one coherent design.
 | C | Pi foundations: audit, egress proxy, nftables, systemd units, provisioning | **Merged** after a security review; the issues that blocked the Pi are fixed |
 | Security core | Orchestrator, policy engine, taint tracking, quarantined reader, memory, approval signing, executor verification | **Merged** after a security review and a fix round |
 | Phase 1 software | LM Studio backend, `atlas-hostd` client, Wake-on-LAN and the wake flow, local grammar for time/date/wake/sleep | **Merged**; not yet run against the real desktop |
+| B5 model benchmark (Phase 1) | [Harness](bench/B5-llm-matrix/README.md): 50-case tool-call eval (15 prompt-injection cases) through the real orchestrator and reader, TTFT and decode trials, report against the §2.8 criteria | **Built**; awaits runs against the desktop's LM Studio, then a model ADR |
 | Phase 2 server | `atlas-ui`: HTTPS, device pairing, step-up PIN, privacy mode, the core control socket | **Merged**; the kiosk on the Pi is still to do |
 | Phase 2 acceptance | `npm run acceptance`: the built HUD in headless Chrome at three widths, every orb state, reduced motion, the kiosk profile and the real paired `atlas-ui`; fails on any CSP violation, off-site request or serious axe finding | **Merged**; 6/6 pass. UP-1..3 and B8 need the Pi with a display |
 | HUD on the Pi (Phase 2) | `atlas-core` and `atlas-ui` as Pi services: the HUD ships in each release, a local CA that keeps no private key, approval PIN set at the Pi's console, device pairing; no desktop needed yet ([ui-on-pi.md](docs/runbooks/ui-on-pi.md)) | **Built**; tested end to end in the VM; installed on the Pi in a coming window |
