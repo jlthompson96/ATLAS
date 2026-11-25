@@ -2,6 +2,7 @@
   import Panel from '../ui/Panel.svelte';
   import { useHud } from '../ctx';
   import { safeText } from '../format/text';
+  import Markdown from '../ui/Markdown.svelte';
   import { known } from './data';
 
   let { dock = false, collapsible = false }: { dock?: boolean; collapsible?: boolean } = $props();
@@ -46,17 +47,24 @@
         <p class="empty">No conversation yet. Say "Hey Atlas" or type below.</p>
       {/if}
       {#each entries as t (`${t.utterance_id}:${t.role}`)}
-        <p class="line {t.role}">
+        <div class="line {t.role}">
           <span class="who mono">{t.role === 'user' ? 'you' : 'atlas'} ▸</span>
-          <span class="txt untrusted">{safeText(t.text, 4000)}</span>
+          {#if t.role === 'assistant' && !t.provenance?.tainted}
+            <!-- ATLAS's own reply: a small Markdown subset, as text nodes only (format/markdown.ts). -->
+            <div class="txt"><Markdown text={safeText(t.text, 4000)} /></div>
+          {:else}
+            <!-- What you typed or said, and any reply with untrusted provenance: plain text, never formatted. -->
+            <span class="txt untrusted plain">{safeText(t.text, 4000)}</span>
+          {/if}
           {#if t.provenance?.tainted}<span class="flag bad"><span aria-hidden="true">▲</span> untrusted source</span>{/if}
-        </p>
+        </div>
       {/each}
       {#if store.partial && store.partial.role === 'user'}
-        <p class="line user live" aria-hidden="true"><span class="who mono">you ▸</span> <span class="txt untrusted">{safeText(store.partial.text, 4000)}</span><span class="cursor">…</span></p>
+        <div class="line user live" aria-hidden="true"><span class="who mono">you ▸</span> <span class="txt untrusted plain">{safeText(store.partial.text, 4000)}<span class="cursor">…</span></span></div>
       {/if}
       {#if store.streaming}
-        <p class="line assistant live" aria-hidden="true"><span class="who mono">atlas ▸</span> <span class="txt untrusted">{safeText(store.streaming.text, 4000)}</span><span class="cursor">▌</span></p>
+        <!-- Plain while it streams: its provenance is known only when the final transcript arrives. -->
+        <div class="line assistant live" aria-hidden="true"><span class="who mono">atlas ▸</span> <span class="txt untrusted plain">{safeText(store.streaming.text, 4000)}<span class="cursor">▌</span></span></div>
       {/if}
     </div>
   {/if}
@@ -100,6 +108,17 @@
   }
   .line {
     margin: 0;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 4px;
+    align-items: baseline;
+  }
+  .line .flag {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .plain {
+    white-space: pre-wrap;
   }
   .who {
     color: var(--muted);

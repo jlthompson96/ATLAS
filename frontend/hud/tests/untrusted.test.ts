@@ -55,7 +55,8 @@ describe('untrusted text is plain text only (x-atlas-untrusted)', () => {
         if (p.panel_id === 'calendar') return { ...p, data: { auth: { status: 'ok' }, events: [{ id: 'e1', title: EVIL, location: EVIL, start: Date.now() + 1000, end: Date.now() + 2000, all_day: false }] } };
         return p;
       });
-      snap.transcript = [{ utterance_id: 'a1', role: 'assistant', text: EVIL, source: 'text' }];
+      // A reply influenced by third-party content carries tainted provenance and stays plain (markdown.test.ts covers formatting).
+      snap.transcript = [{ utterance_id: 'a1', role: 'assistant', text: EVIL, source: 'text', provenance: { tainted: true, sources: [] } }];
       h = mountHud(Shell, { snapshot: snap });
       h.settings.viewportWidth = 1920;
       await settle();

@@ -80,6 +80,7 @@ Each run fails on a CSP violation, an off-origin request, a console error, an un
 | UI-SEC-2: cross-origin rejected | same file (WebSocket and `/api/pair` with a foreign `Origin`) | pass |
 | UI-SEC-3: no external requests | `build.test.ts` (no off-origin URL in the bundle) and `npm run acceptance` (every request the page makes, every run) | pass |
 | UI-SEC-4: zero CSP violations | CSP header and meta tests, plus `npm run acceptance` (all 7 states rendered in Chrome) | pass |
+| Untrusted text stays plain | `untrusted.test.ts` (no HTML sinks, hostile text shown literally) and `markdown.test.ts`: ATLAS's own replies get a small Markdown subset (bold, italic, code, headings, lists) built as text nodes only, with no links or images; what you type and any reply with tainted provenance are never formatted | pass |
 | A11Y-1: axe, zero serious issues | `a11y.test.ts` (jsdom, every state and dialog) and axe in Chrome at 1920, 1000 and 390 px, kiosk, real `atlas-ui` | pass. In Chrome, axe can't decide colour contrast for text over blurred or gradient panels (it reports them as "incomplete"); the design tokens' contrast is checked in `a11y.test.ts`. |
 | A11Y-2: reduced motion honoured | `a11y.test.ts`, `orb.test.ts`, and Chrome with `prefers-reduced-motion: reduce` (only the static tier ran) | pass |
 | A11Y-3: keyboard-only operation | `a11y.test.ts` (real controls only, the whole approval flow from the keyboard) | pass (jsdom; a hands-on keyboard pass on the Pi kiosk is still worth doing) |
