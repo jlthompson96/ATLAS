@@ -2,7 +2,7 @@
 
 Source: PLAN Phase 2 (`atlas-ui`), contracts/services.md (atlas-ui, `core.sock`). Code: `backend/atlas/ui_server/`, `backend/atlas/core/control.py`.
 
-This runs the **real** atlas-core orchestrator and approval flow (with the scripted fake model), the **real** control socket, the **real** `atlas-ui` server over HTTPS/WSS, and the built HUD. Weather, mail counts, markets and host status are demo fixtures from the mock scenarios' baseline; the orb, transcript, pending actions and approvals are live. For pure HUD work against scripted scenarios, keep using the mock server (CLAUDE.md).
+This runs the **real** atlas-core orchestrator and approval flow (with the scripted fake model), the **real** control socket, the **real** `atlas-ui` server over HTTPS/WSS, and the built HUD. Weather, mail counts, markets and host status are samples from the mock scenarios' baseline (the weather panel says "Demo data"); the orb, transcript, pending actions and approvals are live. With a real model (below) the samples are left out. Temperatures show in °F or °C per browser: Settings, Temperature (automatic follows the browser's region). For pure HUD work against scripted scenarios, keep using the mock server (CLAUDE.md).
 
 ## Run it
 
@@ -46,6 +46,7 @@ cd backend
   - If the desktop doesn't come up, the orb shows `llm_unreachable` and the request is saved.
   - The next request that reaches the model delivers the saved ones first.
 - Add `--idle-sleep` to let ATLAS put the desktop back to sleep after 20 idle minutes.
+- No sample panels and no sample system status: a sample would contradict the real desktop (the first run showed the desktop "asleep" while it answered). The panels wait for real sources (`atlas-hostd`, the Pi, Phase 4). `--demo-panels` brings the sample panels back for layout work; the sample host status never comes back with a real model.
 - The demo inbox (Dana's fake email) and the recipient allowlist (`dana@example.org`) stay the same, so `send an email to Dana` still produces an approval card if the model proposes it. The model decides, so the wording varies.
 - The same caveats as the CLI apply. The LAN link is plain HTTP until WireGuard exists, so type only fake content.
 

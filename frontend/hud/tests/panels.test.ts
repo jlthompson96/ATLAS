@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { decimalSign, formatDecimal, formatPct, safeText } from '../src/lib/format/text';
 import Shell from '../src/lib/Shell.svelte';
-import { resolveProfile } from '../src/lib/state/settings.svelte';
+import { localeTemperatureUnit, resolveProfile, Settings } from '../src/lib/state/settings.svelte';
+import { formatTemp, formatWind } from '../src/lib/panels/weather';
 import { sanitizeSlots } from '../src/lib/panels/registry';
 import { ATTRIBUTION, fullSnapshot, TASKS } from './fixtures';
 import { byText, frame, mountHud, q, settle, type Harness } from './helpers';
@@ -244,5 +245,67 @@ describe('layout editing round-trips through layout.save', () => {
     expect(sent).toEqual({ profile: 'remote', slots: { top: 'clock', bottom: 'transcript', left: ['markets'], right: ['pending', 'weather'] } });
     expect(h.store.layouts.remote?.left).toEqual(['markets']);
     expect(q(document.body, '#layout-title')).toBeNull(); // back on the settings dialog
+  });
+});
+
+describe('temperature unit: the contract is Celsius, the viewer picks what to read', () => {
+  it('converts and rounds, and never shows "-0°"', () => {
+    expect(formatTemp(7.4)).toBe('7°');
+    expect(formatTemp(7.4, 'f')).toBe('45°'); // 45.32
+    expect(formatTemp(100, 'f')).toBe('212°');
+    expect(formatTemp(-40, 'f')).toBe('-40°');
+    expect(formatTemp(-17.8, 'f')).toBe('0°'); // -0.04 rounds to -0
+    expect(formatTemp(-0.3)).toBe('0°');
+    expect(formatTemp(Number.NaN, 'f')).toBe('—');
+    expect(formatTemp(undefined, 'f')).toBe('—');
+  });
+
+  it('gives wind in mph with Fahrenheit and km/h with Celsius', () => {
+    expect(formatWind(14, 'f')).toBe('9 mph'); // 8.7
+    expect(formatWind(14, 'c')).toBe('14 km/h');
+    expect(formatWind('14', 'f')).toBe('—');
+  });
+
+  it('reads the region from the browser language', () => {
+    expect(localeTemperatureUnit('en-US')).toBe('f');
+    expect(localeTemperatureUnit('es-US')).toBe('f');
+    expect(localeTemperatureUnit('en-GB')).toBe('c');
+    expect(localeTemperatureUnit('de-DE')).toBe('c');
+    expect(localeTemperatureUnit('fr-CA')).toBe('c');
+    expect(localeTemperatureUnit('')).toBe('c'); // unknown: Celsius
+    expect(localeTemperatureUnit('not a locale')).toBe('c');
+  });
+
+  it('keeps the choice per browser and lets it override the locale', () => {
+    const saved = new Map<string, string>();
+    const storage = { getItem: (k: string) => saved.get(k) ?? null, setItem: (k: string, v: string) => void saved.set(k, v) };
+    const first = new Settings(storage, 'en-GB');
+    expect([first.temperature, first.temperatureUnit]).toEqual(['auto', 'c']);
+    first.set({ temperature: 'f' });
+    const again = new Settings(storage, 'en-GB');
+    expect([again.temperature, again.temperatureUnit]).toEqual(['f', 'f']);
+    again.set({ temperature: 'kelvin' as never }); // not a choice: back to automatic
+    expect(again.temperature).toBe('auto');
+    expect(new Settings(null, 'en-US').temperatureUnit).toBe('f');
+  });
+
+  it('shows the weather panel in the chosen unit', async () => {
+    const h = mountHud(Shell, { snapshot: fullSnapshot() });
+    try {
+      h.settings.viewportWidth = 1920;
+      h.settings.set({ temperature: 'f' });
+      await settle();
+      const weather = () => (q(document.body, '[data-panel=weather]') as HTMLElement).textContent ?? '';
+      expect(weather()).toContain('45°F'); // 7.4 °C
+      expect(weather()).toContain('52° / 39°'); // 11.2 and 3.9 °C
+      expect(weather()).toContain('9 mph');
+      h.settings.set({ temperature: 'c' });
+      await settle();
+      expect(weather()).toContain('7°C');
+      expect(weather()).toContain('11° / 4°');
+      expect(weather()).toContain('14 km/h');
+    } finally {
+      h.cleanup();
+    }
   });
 });
