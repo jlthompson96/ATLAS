@@ -53,6 +53,7 @@ Not done in the VM: segment rotation and sealing (`+i`, needs a day or size roll
 - [ ] `LoadCredentialEncrypted` works with files from `store-credential.sh` (`systemd-creds` host-key mode, no TPM); `$CREDENTIALS_DIRECTORY/audit-checkpoint-key` is a PEM the service parses.
 - [ ] `ProtectSystem=strict` + `StateDirectory` leaves `/var/lib/atlas/audit` writable and everything else (including `releases/`) read-only for the services.
 - [ ] `PrivateTmp`, `ProtectProc=invisible`, `RemoveIPC` do not break the Python runtime.
+- [ ] **`host.status` from `atlas-core`** (core/hoststatus.py): inside its sandbox (no `ProcSubset=pid`, `ProtectProc=invisible`, `PrivateDevices=yes`, `ProtectKernelTunables=yes`) it reads `/proc/stat`, `/proc/meminfo`, `/proc/diskstats`, `/proc/uptime` and `/sys/class/thermal/thermal_zone0/temp`, and still sees no other process. A paired HUD's System panel shows the Pi's figures. **VM 2026-11-25:** with `ProcSubset=pid` the four `/proc` files are hidden, without it readable; other processes hidden either way. The VM has no thermal zone. **Pi 2026-11-25, outside the sandbox:** the publisher read CPU 0.0% (0.03% since boot), RAM 3.5%, 50.1 °C, 26.1 MB written since boot.
 
 ## Audit on real ext4 (PT-13, FI-3)
 
