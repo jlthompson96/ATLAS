@@ -442,6 +442,14 @@ systemd-run() {{
 WHEELED = {**CLEAN, "backend/requirements-audit.lock": LOCK, "wheels/audit/a-1-py3-none-any.whl": b"zip"}
 
 
+def test_every_pip_call_in_the_builder_skips_the_cache() -> None:
+    """The builder has no HOME, so pip without --no-cache-dir warns about '/~/.cache/pip' (window 2026-11-25, step 8)."""
+    text = (DEPLOY / "provisioning" / "atlas-release.sh").read_text()
+    calls = [line for line in text.splitlines() if "-m pip " in line and not line.lstrip().startswith("#")]
+    assert len(calls) >= 2  # install and uninstall
+    assert all("--no-cache-dir" in line for line in calls), calls
+
+
 @needs_gnu_tar
 def test_r1_venvs_are_built_in_ram_streamed_back_and_lose_pip(tmp_path: Path) -> None:
     base, sha = stage(tmp_path, WHEELED)
@@ -450,7 +458,7 @@ def test_r1_venvs_are_built_in_ram_streamed_back_and_lose_pip(tmp_path: Path) ->
     args = (tmp_path / "args").read_text()
     assert "RuntimeDirectory=atlas-build/atlas-audit" in args
     assert "StateDirectory" not in args and "RuntimeDirectoryPreserve" not in args  # nothing left under a dynamic UID
-    assert "pip --isolated uninstall --quiet --yes pip" in args and "tar -C" in args
+    assert "pip --isolated uninstall --quiet --yes --no-cache-dir pip" in args and "tar -C" in args
     venv = base / "releases" / V / "venv" / "atlas-audit"
     assert (venv / "lib" / "x").read_text() == "built\n"
     assert (venv / "bin" / "python3").readlink() == Path("/usr/bin/python3")

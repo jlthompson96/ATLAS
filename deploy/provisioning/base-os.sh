@@ -135,6 +135,16 @@ sudo_content() {
     "Defaults timestamp_type=tty"
 }
 
+# Known issue R2: the Raspberry Pi kernel ships dev.tty.legacy_tiocsti=1, so any process that can write to a terminal can
+# push keystrokes into its input (TIOCSTI) and type commands into the admin's shell. Release code that a provisioning
+# script runs while the admin's terminal is open is one such process. 0 leaves TIOCSTI to CAP_SYS_ADMIN only. The file
+# makes systemd-sysctl set it at every boot; apply also sets it at once.
+TTY_SYSCTL=sysctl.d/50-atlas-tty.conf
+tty_sysctl_content() {
+  printf '%s\n' "# ATLAS: no keystroke injection into terminals (TIOCSTI, known issue R2). Managed by base-os.sh." \
+    "dev.tty.legacy_tiocsti = 0"
+}
+
 # Known issue P1: with the root overlay on, systemd-remount-fs re-applies overlayroot's fstab line for / and the kernel
 # refuses any change to a mounted overlay, so the unit fails at every boot. /media/root-ro (the overlay's lower layer)
 # is a mount point only while the overlay is on, so the unit still runs in a maintenance window.
@@ -391,6 +401,18 @@ apply_sshd() {
   log "  ssh -o ControlPath=none -o PubkeyAuthentication=no -o PreferredAuthentications=password atlas-pi true   # must be refused"
 }
 
+apply_tty() {
+  local dst="$ETC/$TTY_SYSCTL" live="$PROC/sys/dev/tty/legacy_tiocsti"
+  log "== terminals: no keystroke injection (known issue R2)"
+  write_file "$dst" 644 "$(tty_sysctl_content)"
+  if [ ! -r "$live" ]; then
+    log "note    $live missing: this kernel has no legacy_tiocsti switch (check will fail)"
+  elif [ "$(cat "$live")" != 0 ]; then
+    log "set     dev.tty.legacy_tiocsti = 0 (now, without a reboot)"
+    run sysctl -q -p "$dst"
+  fi
+}
+
 cmd_apply() {
   local user
   need_root
@@ -416,6 +438,7 @@ cmd_apply() {
   apply_radios
   apply_tmp
   apply_sudo
+  apply_tty
   log "== remount-fs: skipped while the overlay is on"
   write_reboot "$ETC/$REMOUNT_DROPIN" 644 "$(remount_content)"
   apply_boot_secrets
@@ -588,6 +611,21 @@ check_sudo() {
   fi
 }
 
+# Known issue R2: the live value, and the file that sets it again at the next boot.
+check_tty() {
+  local live="$PROC/sys/dev/tty/legacy_tiocsti"
+  if [ -r "$live" ]; then
+    expect "tty: dev.tty.legacy_tiocsti (R2)" "$(cat "$live")" 0
+  else
+    fail "tty: $live missing: a kernel without the legacy_tiocsti switch always allows TIOCSTI (R2)"
+  fi
+  if same_content "$ETC/$TTY_SYSCTL" "$(tty_sysctl_content)"; then
+    pass "tty: $ETC/$TTY_SYSCTL sets it at boot"
+  else
+    fail "tty: $ETC/$TTY_SYSCTL missing or changed: legacy_tiocsti goes back to 1 at the next boot (run apply)"
+  fi
+}
+
 # The boot-time units behind known issues P1 and P2.
 check_boot() {
   if same_content "$ETC/$REMOUNT_DROPIN" "$(remount_content)"; then
@@ -696,6 +734,7 @@ cmd_check() {
   check_radios
   check_sshd "$user"
   check_sudo "$user"
+  check_tty
   check_boot
   check_boot_secrets
   check_backup

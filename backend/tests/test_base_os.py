@@ -105,6 +105,8 @@ def make_pi(tmp_path: Path) -> Pi:
     (tmp_path / "home/admin/.ssh/authorized_keys").write_text(KEY)
     (tmp_path / "proc/device-tree/model").write_bytes(b"Raspberry Pi 5 Model B Rev 1.1\x00")
     (tmp_path / "proc/meminfo").write_text(f"MemTotal:        {pi.mem_kb} kB\n")
+    (tmp_path / "proc/sys/dev/tty").mkdir(parents=True)
+    (tmp_path / "proc/sys/dev/tty/legacy_tiocsti").write_text("1\n")  # the Raspberry Pi kernel's default (R2)
     return pi
 
 
@@ -157,6 +159,7 @@ systemctl() {{
 timedatectl() {{ echo "{pi.ntp_synced}"; }}
 runuser() {{ return {0 if pi.nobody_reads_boot else 1}; }}
 visudo() {{ echo "visudo $1" >>"{calls}"; return {pi.visudo_rc}; }}
+sysctl() {{ echo "sysctl $*" >>"{calls}"; echo 0 >"{r}/proc/sys/dev/tty/legacy_tiocsti"; }}
 sudo() {{
   case "$1" in
     -V) echo "Authentication timestamp timeout: 15.0 minutes"; echo "Type of authentication timestamp record: {pi.sudo_ts}" ;;
@@ -225,6 +228,10 @@ def test_apply_writes_steps_8_and_9(tmp_path: Path) -> None:
     sudoers = pi.etc / "sudoers.d/020_atlas-tty"  # read after Pi OS's 010_global-tty, so it wins
     assert "Defaults timestamp_type=tty" in sudoers.read_text().splitlines()
     assert sudoers.stat().st_mode & 0o777 == 0o440
+    tty = pi.etc / "sysctl.d/50-atlas-tty.conf"  # known issue R2
+    assert "dev.tty.legacy_tiocsti = 0" in tty.read_text().splitlines()
+    assert tty.stat().st_mode & 0o777 == 0o644
+    assert (tmp_path / "proc/sys/dev/tty/legacy_tiocsti").read_text().strip() == "0"  # set now, not at the next boot
     assert not (tmp_path / "var-swap").exists()
 
     config = (pi.boot / "config.txt").read_text()
@@ -235,6 +242,7 @@ def test_apply_writes_steps_8_and_9(tmp_path: Path) -> None:
 
     assert pi.calls == [
         "visudo -cf",
+        f"sysctl -q -p {pi.etc}/sysctl.d/50-atlas-tty.conf",
         "sshd -t",
         "systemctl is-active --quiet ssh.service",
         "systemctl reload ssh.service",
@@ -260,6 +268,22 @@ def test_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert tree(pi) == before
     assert pi.calls == []
+
+
+@pytest.mark.parametrize(("live", "note"), [("0\n", None), (None, "no legacy_tiocsti switch")])
+def test_apply_sets_legacy_tiocsti_only_when_it_is_on(tmp_path: Path, live: str | None, note: str | None) -> None:
+    pi = make_pi(tmp_path)
+    switch = tmp_path / "proc/sys/dev/tty/legacy_tiocsti"
+    if live is None:
+        switch.unlink()  # a kernel without the switch (before 6.2)
+    else:
+        switch.write_text(live)  # Debian's own kernel already has 0
+    result = run(pi, "cmd_apply")
+    assert result.returncode == 0, result.stderr
+    assert (pi.etc / "sysctl.d/50-atlas-tty.conf").exists()  # still written: it holds the value across kernels
+    assert not any(call.startswith("sysctl") for call in pi.calls)
+    if note:
+        assert note in result.stderr
 
 
 def test_apply_refuses_without_an_admin_key(tmp_path: Path) -> None:
@@ -481,6 +505,9 @@ def test_check_passes_on_a_set_up_pi(tmp_path: Path) -> None:
         (lambda pi: setattr(pi, "sshd_t", GOOD_SSHD_T.replace("passwordauthentication no", "passwordauthentication yes")), "passwordauthentication"),
         (lambda pi: setattr(pi, "sshd_t", ""), "sshd -T"),
         (lambda pi: setattr(pi, "sudo_ts", "global"), "timestamp_type"),
+        (lambda pi: (pi.root / "proc/sys/dev/tty/legacy_tiocsti").write_text("1\n"), "legacy_tiocsti (R2): got '1'"),
+        (lambda pi: (pi.root / "proc/sys/dev/tty/legacy_tiocsti").unlink(), "without the legacy_tiocsti switch"),
+        (lambda pi: (pi.etc / "sysctl.d/50-atlas-tty.conf").unlink(), "back to 1 at the next boot"),
         (lambda pi: setattr(pi, "remount_failed", True), "failed this boot"),
         (lambda pi: (pi.etc / "systemd/system/systemd-remount-fs.service.d/50-atlas-overlay.conf").unlink(), "missing or changed"),
         (lambda pi: setattr(pi, "ntp_synced", "no"), "clock synchronized"),
