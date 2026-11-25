@@ -492,3 +492,45 @@ def test_reasoning_effort_is_sent_only_when_configured() -> None:
 def test_unknown_reasoning_effort_is_refused(effort: str) -> None:
     with pytest.raises(ValueError, match="reasoning_effort"):
         LMStudioBackend("http://127.0.0.1:1234", reasoning_effort=effort)
+
+
+# --- stall guard (ADR 0004) ----------------------------------------------------------------------------------------
+
+
+def _stall_run(reply: Reply, *, first: float = 5.0, idle: float = 5.0, budget: float = 5.0) -> tuple[Any, float]:
+    async def go() -> tuple[Any, float]:
+        server = await FakeServer(lmstudio(lambda r: reply)).start()
+        backend = LMStudioBackend(server.url, token=TOKEN, model=MODEL, stall_first_s=first, stall_idle_s=idle)
+        started = time.monotonic()
+        try:
+            out: Any = await collect(backend.chat(USER, max_tokens=8, deadline=deadline(budget)))
+        except Exception as exc:
+            out = exc
+        finally:
+            await server.close()
+        return out, time.monotonic() - started
+
+    return run(go())
+
+
+def test_a_stream_that_goes_quiet_is_dropped_as_unreachable() -> None:
+    reply = Reply(chunks=sse({"choices": [{"delta": {"content": "Hel"}}]}), hang_after_chunks=True)
+    out, took = _stall_run(reply, idle=0.2)
+    assert isinstance(out, BackendUnreachable) and str(out) == "stream stalled"
+    assert took < 2.0  # not the 5 s budget
+
+
+def test_a_stream_that_never_starts_is_dropped_after_the_first_byte_limit() -> None:
+    out, took = _stall_run(Reply(chunks=[], hang_after_chunks=True), first=0.2, idle=5.0)
+    assert isinstance(out, BackendUnreachable) and took < 2.0
+
+
+def test_a_normal_stream_passes_a_tight_guard() -> None:
+    out, _ = _stall_run(text_stream("Hello", " there"), first=1.0, idle=0.5)
+    assert "".join(d.text for d in out) == "Hello there"
+
+
+def test_the_request_deadline_still_wins_when_it_is_shorter() -> None:
+    reply = Reply(chunks=sse({"choices": [{"delta": {"content": "Hel"}}]}), hang_after_chunks=True)
+    out, took = _stall_run(reply, idle=5.0, budget=0.3)
+    assert isinstance(out, DeadlineExceeded) and took < 2.0

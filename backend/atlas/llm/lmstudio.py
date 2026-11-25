@@ -17,6 +17,7 @@ machine word, never server text, because a server error can echo the prompt.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -64,6 +65,11 @@ WARMUP_PROMPT: Final = "ping"
 # OpenAI-style ``reasoning_effort``. LM Studio 0.4.28 honours "none" for Gemma 4 E4B (no reasoning tokens);
 # other values left it thinking in full (bench/results/B5-2026-11-25.md). None: the field is not sent.
 REASONING_EFFORTS: Final = ("none", "low", "medium", "high")
+# Stall guard (ADR 0004). With reasoning off, Gemma 4 E4B sometimes streamed a few tokens and then nothing
+# until the 60 s request budget ran out, and LM Studio then refused connections for a few seconds. A stream
+# that goes quiet is dropped instead: closing the connection lets the server stop generating.
+STALL_FIRST_S: Final = 30.0  # first body bytes (allows prompt processing of a full context)
+STALL_IDLE_S: Final = 10.0  # between body chunks, once streaming
 
 
 class CredentialError(ValueError):
@@ -145,6 +151,8 @@ class LMStudioBackend(LLMBackend):
         max_ctx: int = 16_384,
         request_timeout_s: float = DEFAULT_REQUEST_TIMEOUT_S,
         reasoning_effort: str | None = None,
+        stall_first_s: float = STALL_FIRST_S,
+        stall_idle_s: float = STALL_IDLE_S,
     ) -> None:
         if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
             raise ValueError(f"reasoning_effort must be one of {', '.join(REASONING_EFFORTS)}")
@@ -156,6 +164,8 @@ class LMStudioBackend(LLMBackend):
         self._max_ctx = max_ctx
         self._timeout = request_timeout_s
         self._reasoning_effort = reasoning_effort
+        self._stall_first_s = stall_first_s
+        self._stall_idle_s = stall_idle_s
 
     @classmethod
     def from_token_file(cls, base_url: str, token_file: Path | str | None, **kwargs: Any) -> LMStudioBackend:
@@ -284,7 +294,7 @@ class LMStudioBackend(LLMBackend):
                 if resp.status != 200:
                     _raise_for_status(resp.status, await resp.read(64 * 1024))
                 pending = b""
-                async for chunk in resp.chunks():
+                async for chunk in self._guarded(resp.chunks()):
                     pending += chunk
                     while (nl := pending.find(b"\n")) >= 0:
                         line, pending = pending[:nl], pending[nl + 1 :]
@@ -324,6 +334,20 @@ class LMStudioBackend(LLMBackend):
         yield Delta(tool_calls=calls, finish_reason=_finish(finish_raw, bool(calls)), usage=usage)
 
     # --- helpers ------------------------------------------------------------------------------
+
+    async def _guarded(self, chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+        """``chunks``, but a stream that goes quiet raises ``BackendUnreachable`` (the stall guard)."""
+        it = aiter(chunks)
+        timeout = self._stall_first_s
+        while True:
+            try:
+                chunk = await asyncio.wait_for(anext(it), timeout)
+            except StopAsyncIteration:
+                return
+            except TimeoutError:
+                raise BackendUnreachable("stream stalled") from None
+            timeout = self._stall_idle_s
+            yield chunk
 
     async def _get(self, path: str, deadline: float) -> tuple[int, bytes]:
         try:
