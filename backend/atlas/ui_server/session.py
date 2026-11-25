@@ -184,7 +184,16 @@ class Session:
         errors = self.contract.errors("client", frame)
         seq = frame.get("seq", -1) if isinstance(frame, dict) else -1
         if errors:
-            log.warning("invalid client frame from %s: %s", self.device.device_id, redact_for_log(frame))
+            # Metadata only: redaction works by field name, so a malformed frame (typed text under a wrong key) would
+            # slip through, and a schema error quotes the offending value. Type (if known), size and error count.
+            kind = frame.get("type") if isinstance(frame, dict) else None
+            log.warning(
+                "invalid client frame from %s: type %s, %d bytes, %d schema error(s)",
+                self.device.device_id,
+                kind if kind in self.contract.client_types else "?",
+                len(raw),
+                len(errors),
+            )
             await self._result(seq if isinstance(seq, int) else -1, False, "INVALID_MESSAGE", errors[0][:200])
             return
         if seq <= self._client_seq:
@@ -193,8 +202,10 @@ class Session:
         self._client_seq = seq
         if frame["type"] not in NO_ACTIVITY:
             self._last_activity = self._mono()
+        # DEBUG, not INFO: on the Pi, INFO lines are journal writes on the SD card (budget: 100 MB/day), and a frame per
+        # heartbeat adds up. Redacted either way (events.v1 x-atlas-sensitive: what you type is never logged).
         if frame["type"] != "clock.ping":
-            log.info("client %s %s", self.device.device_id, redact_for_log(frame))
+            log.debug("client %s %s", self.device.device_id, redact_for_log(frame))
         await getattr(self, "_on_" + frame["type"].replace(".", "_"))(seq, frame["payload"])
 
     async def _result(self, ref_seq: int, ok: bool, code: str | None = None, message: str | None = None) -> None:

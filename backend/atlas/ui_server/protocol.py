@@ -61,6 +61,11 @@ class Contract:
             "client": Draft202012Validator({**base, "$ref": "#/$defs/ClientMessage"}),
         }
         self.sensitive_keys: frozenset[str] = frozenset(_sensitive_keys(schema))
+        self.client_types: frozenset[str] = frozenset(
+            t
+            for part in defs["ClientMessage"]["allOf"]
+            for t in part.get("properties", {}).get("type", {}).get("enum", [])
+        )
 
     @classmethod
     @cache

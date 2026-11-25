@@ -326,12 +326,14 @@ def test_sensitive_fields_never_reach_the_logs(caplog: Any) -> None:
             await client.of_type("request.result")
             await client.send("portfolio.unlock", {"passphrase": "hunter2-passphrase"})
             await client.of_type("request.result")
+            await client.send("text.input", {"text": "my private question about Dana"})  # events.v1 1.2.0
+            await client.of_type("request.result")
             await client.conn.close()
             assert token  # for the assertions below
 
             # (the websockets *client* in this test logs its own frames; only the server side matters)
             text = "\n".join(r.getMessage() for r in caplog.records if not r.name.startswith("websockets.client"))
-            for secret in ("4321", "hunter2-passphrase"):
+            for secret in ("4321", "hunter2-passphrase", "my private question"):
                 assert secret not in text
             assert token not in text
 
@@ -401,4 +403,27 @@ def test_server_frames_are_schema_valid_and_ordered() -> None:
             for frame in client.frames:
                 contract.validate("server", frame)
 
+    run(go())
+
+
+def test_an_invalid_frame_is_logged_without_its_content(caplog: Any) -> None:
+    """Redaction is by field name, so a malformed frame logs metadata only (2026-11-25)."""
+
+    async def go() -> None:
+        async with Stack() as s:
+            client = await s.ws(await s.pair("remote"))
+            await client.conn.send(
+                json.dumps(
+                    {"v": 1, "type": "text.input", "seq": 1, "ts": 1, "payload": {"txt": "a secret in the wrong key"}}
+                )
+            )
+            assert (await client.of_type("request.result"))["payload"]["code"] == "INVALID_MESSAGE"
+            await client.conn.close()
+            text = "\n".join(r.getMessage() for r in caplog.records if not r.name.startswith("websockets.client"))
+            assert "a secret in the wrong key" not in text
+            assert "invalid client frame" in text and "type text.input" in text and "schema error(s)" in text
+
+    import logging
+
+    caplog.set_level(logging.DEBUG)
     run(go())
