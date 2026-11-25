@@ -19,9 +19,10 @@ import pytest
 
 from atlas.core.fake_llm import ScriptedBackend, Turn, call_turn, text_turn
 from atlas.llm.interface import Delta, FinishReason, Role, Usage
-from tests.net_support import TOKEN, Reply, Request, sse, threaded
+from tests.net_support import TOKEN, FakeServer, Reply, Request, sse, threaded
 
 BENCH = Path(__file__).resolve().parents[2] / "bench" / "B5-llm-matrix"
+MODEL = "b5-test-model"
 
 
 def _load() -> ModuleType:
@@ -233,17 +234,85 @@ def test_latency_and_tokens_are_recorded() -> None:
 # --- perf maths, statistics and the report ------------------------------------------------------
 
 
+def _perf_on(chunks: list[Any], times: list[float]) -> Any:
+    """One perf trial against a fake LM Studio streaming ``chunks``; the harness clock reads ``times``."""
+
+    async def go() -> Any:
+        server = await FakeServer(lambda req: Reply(chunks=sse(*chunks))).start()
+        try:
+            target = b5.PerfTarget.of(server.url, None, MODEL)
+            clock = iter(times)
+            return await b5.perf_trial(target, 100, 1, clock=lambda: next(clock))
+        finally:
+            await server.close()
+
+    return run(go())
+
+
+def _usage(prompt: int, completion: int, reasoning: int | None = None) -> dict[str, Any]:
+    usage: dict[str, Any] = {"prompt_tokens": prompt, "completion_tokens": completion}
+    if reasoning is not None:
+        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning}
+    return {"choices": [], "usage": usage}
+
+
 def test_perf_trial_ttft_and_decode() -> None:
-    times = iter([100.0, 100.4, 102.4])  # start, first visible token, end
-    turn = [Delta(text="Summary"), Delta(finish_reason=FinishReason.STOP, usage=Usage(2010, 101))]
-    trial = run(b5.perf_trial(ScriptedBackend([turn]), 100, 1, clock=lambda: next(times)))
-    assert (trial.ttft_ms, trial.total_ms, trial.decode_tps, trial.prompt_tokens) == (400, 2400, 50.0, 2010)
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant"}}]},
+        {"choices": [{"delta": {"content": "Summary"}}]},
+        {"choices": [{"delta": {"content": " text."}, "finish_reason": "stop"}]},
+        _usage(2010, 101),
+        "[DONE]",
+    ]
+    trial = _perf_on(chunks, [100.0, 100.4, 100.4, 102.4])  # start, first token, first visible, end
+    assert (trial.ttft_ms, trial.visible_ms, trial.total_ms, trial.decode_tps) == (400, 400, 2400, 50.0)
+    assert (trial.prompt_tokens, trial.completion_tokens, trial.reasoning_tokens) == (2010, 101, None)
+
+
+def test_perf_trial_counts_reasoning_as_first_token() -> None:
+    """A thinking model: TTFT is the first reasoning token; the first visible token is reported apart."""
+    chunks = [
+        {"choices": [{"delta": {"reasoning_content": "Thinking"}}]},
+        {"choices": [{"delta": {"reasoning_content": " more"}}]},
+        {"choices": [{"delta": {"content": "Answer"}, "finish_reason": "stop"}]},
+        _usage(1972, 321, 300),
+        "[DONE]",
+    ]
+    trial = _perf_on(chunks, [0.0, 0.9, 5.9, 6.9])
+    assert (trial.ttft_ms, trial.visible_ms, trial.reasoning_tokens) == (900, 5900, 300)
+    assert trial.decode_tps == 53.3  # 320 tokens after the first, in 6.0 s
+
+
+def test_perf_trial_all_reasoning_still_measures_speed() -> None:
+    chunks = [{"choices": [{"delta": {"reasoning_content": "Thinking"}, "finish_reason": "length"}]},
+              _usage(1972, 320, 317), "[DONE]"]  # fmt: skip
+    trial = _perf_on(chunks, [0.0, 0.87, 7.0])
+    assert trial.ttft_ms == 870 and trial.visible_ms is None and trial.decode_tps is not None
 
 
 def test_perf_trial_without_enough_tokens_reports_no_rate() -> None:
-    times = iter([0.0, 0.1, 0.2])
-    turn = [Delta(text="ok"), Delta(finish_reason=FinishReason.STOP, usage=Usage(2000, 3))]
-    assert run(b5.perf_trial(ScriptedBackend([turn]), 100, 1, clock=lambda: next(times))).decode_tps is None
+    chunks = [{"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}, _usage(2000, 3), "[DONE]"]
+    assert _perf_on(chunks, [0.0, 0.1, 0.1, 0.2]).decode_tps is None
+
+
+def test_perf_trial_http_error_is_recorded() -> None:
+    async def go() -> Any:
+        server = await FakeServer(lambda req: Reply.of_json({"error": "x"}, 500)).start()
+        try:
+            return await b5.perf_trial(b5.PerfTarget.of(server.url, None, MODEL), 100, 1)
+        finally:
+            await server.close()
+
+    trial = run(go())
+    assert trial.error == "HTTP 500" and trial.ttft_ms is None
+
+
+def test_perf_target_repr_hides_the_token(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text(TOKEN + "\n")
+    token_file.chmod(0o600)
+    target = b5.PerfTarget.of("http://127.0.0.1:9", token_file, MODEL)
+    assert TOKEN not in repr(target) and target.headers["Authorization"] == f"Bearer {TOKEN}"
 
 
 def test_perf_prompt_is_fresh_each_time() -> None:
@@ -298,11 +367,10 @@ def test_report_table_failures_and_mixed_case_sets() -> None:
     assert "meets B5" in text and "misses: decode (FAIL)" in text
     assert "| N48" in text and "| N49" in text
     assert "WARNING: these runs used different case sets" in text
+    assert "decode p50 ≥ 25 tok/s" in text and "{" not in text
 
 
 # --- the CLI end to end against a fake LM Studio ------------------------------------------------
-
-MODEL = "b5-test-model"
 
 
 def _fake_lmstudio(req: Request) -> Reply:
@@ -357,9 +425,16 @@ def test_run_against_fake_lmstudio_writes_no_secret_or_address(tmp_path: Path) -
     assert TOKEN not in raw and "127.0.0.1" not in raw and port not in raw
     assert TOKEN not in "".join(lines) and "127.0.0.1" not in "".join(lines)
     data = json.loads(raw)
-    assert data["model"] == {"id": MODEL, "quantization": "Q4_K_M", "context": 8192, "arch": None}
+    assert data["model"] == {
+        "id": MODEL,
+        "quantization": "Q4_K_M",
+        "context": 8192,
+        "arch": None,
+        "reasoning_effort": None,
+    }
     assert {r["case"]: r["passed"] for r in data["cases"]} == {"N01": True, "R01": True, "N18": False}
     assert len(data["perf"]) == 2 and all(p["prompt_tokens"] == 2000 for p in data["perf"])
+    assert all(p["ttft_ms"] is not None and p["visible_ms"] is not None for p in data["perf"])
     assert data["vram_mb"] == 5900
     # report reads it back
     rep: list[str] = []

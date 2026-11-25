@@ -60,26 +60,34 @@ class DraftError(Exception):
 
 
 _EMAIL_TEXT = PlainText(254, pattern=EMAIL_RE.pattern, single_line=True)
-_PARTS = Array(RefOr(PlainText(4000)), max_items=MAX_PARTS, min_items=1)
 
 PROPOSE_ARGS: Final = Obj(
     {
         "kind": Enum(tuple(sorted(k.value for k in PROPOSABLE_KINDS)), description="What to do."),
         "summary": PlainText(200, min_len=1, single_line=True, description="One line for the approval card."),
-        "to": Array(RefOr(_EMAIL_TEXT), max_items=10, description="email.send: addresses or $VAR names."),
-        "cc": Array(RefOr(_EMAIL_TEXT), max_items=10),
-        "subject": RefOr(PlainText(200, single_line=True)),
+        "to": Array(RefOr(_EMAIL_TEXT), max_items=10, description="email.send (required): addresses or $VAR names."),
+        "cc": Array(RefOr(_EMAIL_TEXT), max_items=10, description="email.send (optional)."),
+        "subject": RefOr(PlainText(200, single_line=True), description="email.send (required)."),
         "body": Array(
             RefOr(PlainText(4000)),
             max_items=MAX_PARTS,
             min_items=1,
-            description="Text parts and/or $VAR names, joined in order.",
+            description="email.send (required): text parts and/or $VAR names, joined in order.",
         ),
-        "in_reply_to": Ref(description="email.send: the $EMAIL_n item being answered."),
-        "channel_id": PlainText(20, pattern="[0-9]{17,20}", description="discord.post: an allowlisted channel ID."),
-        "content": _PARTS,
-        "question": PlainText(300, min_len=1, single_line=True, description="research.schedule: the question."),
-        "every_minutes": Int(1, 10080),
+        "in_reply_to": Ref(description="email.send (optional): the $EMAIL_n item being answered."),
+        "channel_id": PlainText(
+            20, pattern="[0-9]{17,20}", description="discord.post (required): an allowlisted channel ID."
+        ),
+        "content": Array(
+            RefOr(PlainText(4000)),
+            max_items=MAX_PARTS,
+            min_items=1,
+            description="discord.post (required): text parts and/or $VAR names, joined in order.",
+        ),
+        "question": PlainText(
+            300, min_len=1, single_line=True, description="research.schedule (required): the question."
+        ),
+        "every_minutes": Int(1, 10080, description="research.schedule (required): minutes between runs, 60 or more."),
     },
     required=frozenset({"kind", "summary"}),
 )

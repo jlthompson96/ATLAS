@@ -32,6 +32,7 @@ import math
 import random
 import re
 import secrets
+import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -69,6 +70,8 @@ from atlas.llm.interface import (  # noqa: E402
     ToolSpec,
     Usage,
 )
+from atlas.llm.lmstudio import read_token_file  # noqa: E402
+from atlas.net.http import Endpoint, HttpDeadlineError, HttpTransportError, parse_http_url, request  # noqa: E402
 from atlas.policy.engine import Allowlists  # noqa: E402
 
 RESULT_SCHEMA: Final = 1
@@ -455,48 +458,110 @@ def perf_messages(words: int, seed: int) -> list[Message]:
 class PerfTrial:
     prompt_tokens: int | None
     completion_tokens: int | None
-    ttft_ms: int | None
+    ttft_ms: int | None  # first generated token of any kind (prefill latency)
     total_ms: int
-    decode_tps: float | None
+    decode_tps: float | None  # completion tokens per second after the first token
+    visible_ms: int | None = None  # first token the user would see (thinking models: after reasoning)
+    reasoning_tokens: int | None = None
     error: str | None = None
 
 
-async def perf_trial(live: LLMBackend, words: int, seed: int, clock: Callable[[], float] = time.monotonic) -> PerfTrial:
+@dataclass(frozen=True)
+class PerfTarget:
+    """LM Studio, reached directly: the LLMBackend contract drops reasoning deltas, which TTFT must count."""
+
+    endpoint: Endpoint
+    headers: Mapping[str, str]
+    model: str
+    reasoning_effort: str | None = None
+
+    @classmethod
+    def of(cls, base_url: str, token_file: Path | None, model: str, reasoning_effort: str | None = None) -> PerfTarget:
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if token_file is not None:
+            headers["Authorization"] = f"Bearer {read_token_file(token_file)}"
+        return cls(parse_http_url(base_url), headers, model, reasoning_effort)
+
+    def __repr__(self) -> str:  # never show headers
+        return f"PerfTarget({self.model})"
+
+
+async def perf_trial(
+    target: PerfTarget, words: int, seed: int, clock: Callable[[], float] = time.monotonic
+) -> PerfTrial:
+    payload = {
+        "model": target.model,
+        "messages": [{"role": m.role.value, "content": m.content} for m in perf_messages(words, seed)],
+        "max_tokens": 320,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if target.reasoning_effort is not None:
+        payload["reasoning_effort"] = target.reasoning_effort
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     started = clock()
     first: float | None = None
-    usage: Usage | None = None
+    visible: float | None = None
+    usage: Mapping[str, Any] = {}
+    pending = b""
     try:
-        async for delta in live.chat(perf_messages(words, seed), max_tokens=320, deadline=started + 120.0):
-            if first is None and delta.text:
-                first = clock()
-            if delta.usage is not None:
-                usage = delta.usage
-    except LLMError as exc:
-        return PerfTrial(None, None, None, round((clock() - started) * 1000), None, type(exc).__name__)
+        async with request(
+            target.endpoint, "POST", "/v1/chat/completions", headers=dict(target.headers), body=body,
+            deadline=time.monotonic() + 120.0,
+        ) as resp:  # fmt: skip
+            if resp.status != 200:
+                return PerfTrial(None, None, None, round((clock() - started) * 1000), None, error=f"HTTP {resp.status}")
+            async for chunk in resp.chunks():
+                pending += chunk
+                while (nl := pending.find(b"\n")) >= 0:
+                    line, pending = pending[:nl].strip(), pending[nl + 1 :]
+                    if not line.startswith(b"data:") or line[5:].strip() == b"[DONE]":
+                        continue
+                    obj = json.loads(line[5:])
+                    if isinstance(obj.get("usage"), dict):
+                        usage = obj["usage"]
+                    for choice in (obj.get("choices") or [])[:1]:
+                        delta = choice.get("delta") or {}
+                        if first is None and (delta.get("content") or delta.get("reasoning_content")):
+                            first = clock()
+                        if visible is None and delta.get("content"):
+                            visible = clock()
+    except (HttpTransportError, HttpDeadlineError, ValueError) as exc:
+        return PerfTrial(None, None, None, round((clock() - started) * 1000), None, error=type(exc).__name__)
     ended = clock()
+    completion = usage.get("completion_tokens")
+    details = usage.get("completion_tokens_details")
+    reasoning = details.get("reasoning_tokens") if isinstance(details, dict) else None
     tps = None
-    if usage is not None and first is not None and usage.completion_tokens >= 16 and ended > first:
-        tps = round((usage.completion_tokens - 1) / (ended - first), 1)
+    if isinstance(completion, int) and first is not None and completion >= 16 and ended > first:
+        tps = round((completion - 1) / (ended - first), 1)
+    prompt = usage.get("prompt_tokens")
     return PerfTrial(
-        usage.prompt_tokens if usage else None,
-        usage.completion_tokens if usage else None,
+        prompt if isinstance(prompt, int) else None,
+        completion if isinstance(completion, int) else None,
         _ms(started, first),
         round((ended - started) * 1000),
         tps,
+        visible_ms=_ms(started, visible),
+        reasoning_tokens=reasoning if isinstance(reasoning, int) else None,
     )
 
 
-async def perf_trials(live: LLMBackend, n: int, out: Any) -> list[PerfTrial]:
+async def perf_trials(target: PerfTarget, n: int, out: Any) -> list[PerfTrial]:
     """One calibration request (also a warm-up, not counted), then ``n`` measured ones."""
     words = 1400
-    calib = await perf_trial(live, words, 0)
+    calib = await perf_trial(target, words, 0)
     if calib.prompt_tokens:
         words = max(100, round(words * PERF_PROMPT_TOKENS / calib.prompt_tokens))
     print(f"perf: calibration {calib.prompt_tokens} prompt tokens -> {words} words", file=out)
     trials = []
     for i in range(n):
-        trial = await perf_trial(live, words, i + 1)
-        print(f"perf {i + 1}/{n}: ttft {trial.ttft_ms} ms, {trial.decode_tps} tok/s", file=out)
+        trial = await perf_trial(target, words, i + 1)
+        print(
+            f"perf {i + 1}/{n}: ttft {trial.ttft_ms} ms, first visible {trial.visible_ms} ms, "
+            f"{trial.decode_tps} tok/s, {trial.reasoning_tokens} reasoning tokens",
+            file=out,
+        )
         trials.append(trial)
     return trials
 
@@ -511,6 +576,28 @@ def percentile(values: Sequence[float], p: float) -> float | None:
     ordered = sorted(values)
     rank = max(1, math.ceil(p / 100 * len(ordered)))
     return ordered[rank - 1]
+
+
+def atlas_revision() -> str:
+    """The commit the run used (the prompts and tool descriptions are ATLAS code), plus "-dirty" if changed."""
+    try:
+        sha = subprocess.run(  # noqa: S603 - fixed arguments
+            ["git", "-C", str(HERE), "rev-parse", "--short=12", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        ).stdout.strip()
+        dirty = subprocess.run(  # noqa: S603
+            ["git", "-C", str(HERE.parents[1]), "status", "--porcelain", "--", "backend/atlas", "bench/B5-llm-matrix"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return sha + ("-dirty" if dirty else "")
 
 
 def cases_digest() -> str:
@@ -528,6 +615,8 @@ def summarize(run: Mapping[str, Any]) -> dict[str, Any]:
     perf = [p for p in run.get("perf", []) if p.get("error") is None]
     ttft = [p["ttft_ms"] for p in perf if p.get("ttft_ms") is not None]
     tps = [p["decode_tps"] for p in perf if p.get("decode_tps") is not None]
+    visible = [p["visible_ms"] for p in perf if p.get("visible_ms") is not None]
+    reasoning = [p["reasoning_tokens"] for p in perf if p.get("reasoning_tokens")]
     ptok = [p["prompt_tokens"] for p in perf if p.get("prompt_tokens")]
     latency = [r["latency_ms"] for r in results if r.get("latency_ms") is not None and r["kind"] == "planner"]
     accuracy = passed / total if total else None
@@ -549,6 +638,8 @@ def summarize(run: Mapping[str, Any]) -> dict[str, Any]:
         "ttft_p50": ttft_p50,
         "ttft_p95": percentile(ttft, 95),
         "tps_p50": tps_p50,
+        "visible_p50": percentile(visible, 50),
+        "reasoning": round(sum(reasoning) / len(reasoning)) if reasoning else 0,
         "prompt_tokens": round(sum(ptok) / len(ptok)) if ptok else None,
         "step_p50": percentile(latency, 50),
         "step_p95": percentile(latency, 95),
@@ -572,27 +663,29 @@ def _mark(ok: bool | None) -> str:
 
 def report(runs: Sequence[Mapping[str, Any]]) -> str:
     lines = [
-        "| Model | Quant | Ctx | Tool-call accuracy | Normal | Injection | TTFT p50 / p95 (prompt) | Decode p50 | "
-        "Planner step p50 / p95 | VRAM | Verdict |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Model | Quant | Ctx | Tool-call accuracy | Normal | Injection | TTFT p50 / p95 (prompt) | "
+        "First visible p50 (reasoning tok) | Decode p50 | Planner step p50 / p95 | VRAM | Verdict |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for run in runs:
         s = summarize(run)
         m = run.get("model", {})
         misses = [k for k, v in s["checks"].items() if v is not True]
         verdict = "meets B5" if s["meets"] else "misses: " + ", ".join(f"{k} ({_mark(s['checks'][k])})" for k in misses)
+        effort = f" (reasoning_effort {m['reasoning_effort']})" if m.get("reasoning_effort") else ""
         acc = "n/a" if s["accuracy"] is None else f"{s['passed']}/{s['total']} ({s['accuracy']:.0%})"
         lines.append(
-            f"| `{m.get('id', '?')}` | {m.get('quantization') or 'n/a'} | {_fmt(m.get('context'))} | {acc} | "
+            f"| `{m.get('id', '?')}`{effort} | {m.get('quantization') or 'n/a'} | {_fmt(m.get('context'))} | {acc} | "
             f"{s['normal'][0]}/{s['normal'][1]} | {s['injection'][0]}/{s['injection'][1]} | "
             f"{_fmt(s['ttft_p50'], ' ms')} / {_fmt(s['ttft_p95'], ' ms')} ({_fmt(s['prompt_tokens'])} tok) | "
-            f"{_fmt(s['tps_p50'], ' tok/s')} | {_fmt(s['step_p50'], ' ms')} / {_fmt(s['step_p95'], ' ms')} | "
+            f"{_fmt(s['visible_p50'], ' ms')} ({s['reasoning']}) | {_fmt(s['tps_p50'], ' tok/s')} | {_fmt(s['step_p50'], ' ms')} / {_fmt(s['step_p95'], ' ms')} | "
             f"{_fmt(s['vram'], ' MB')} | {verdict} |"
         )
     lines += [
         "",
         f"Criteria (PLAN.md §2.8): accuracy ≥ {MIN_ACCURACY:.0%} over every graded attempt; TTFT p50 ≤ "
-        f"{MAX_TTFT_MS:.0f} ms at a ~{PERF_PROMPT_TOKENS}-token prompt; decode p50 ≥ {MIN_DECODE_TPS:.0f} tok/s; "
+        f"{MAX_TTFT_MS:.0f} ms at a ~{PERF_PROMPT_TOKENS}-token prompt (first token of any kind, reasoning included; "
+        f"the first visible token is reported beside it); decode p50 ≥ {MIN_DECODE_TPS:.0f} tok/s; "
         f"VRAM ≤ {MAX_VRAM_MB} MB in total (read from nvidia-smi on the desktop).",
     ]
     failures: dict[str, dict[str, list[str]]] = {}
@@ -643,7 +736,12 @@ async def run_all(args: argparse.Namespace, out: Any) -> dict[str, Any]:
         "bench": "B5",
         "schema": RESULT_SCHEMA,
         "started": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "harness": {"cases_digest": cases_digest(), "repeat": args.repeat, "cases": len(selected)},
+        "harness": {
+            "cases_digest": cases_digest(),
+            "atlas": atlas_revision(),
+            "repeat": 0 if args.no_eval else args.repeat,
+            "cases": 0 if args.no_eval else len(selected),
+        },
         "vram_mb": args.vram_mb,
         "note": args.note,
     }
@@ -664,14 +762,22 @@ async def run_all(args: argparse.Namespace, out: Any) -> dict[str, Any]:
     # The reader sizes item text from the context window, so use the one the model was loaded with.
     max_ctx = args.max_ctx or run["model"]["context"] or 16_384
     run["model"]["context"] = max_ctx
-    live = LMStudioBackend.from_token_file(args.base_url, args.token_file, model=run["model"]["id"], max_ctx=max_ctx)
+    run["model"]["reasoning_effort"] = args.reasoning_effort
+    live = LMStudioBackend.from_token_file(
+        args.base_url,
+        args.token_file,
+        model=run["model"]["id"],
+        max_ctx=max_ctx,
+        reasoning_effort=args.reasoning_effort,
+    )
     ready = await live.ensure_ready(run["model"]["id"], time.monotonic() + 120.0)
     if not isinstance(ready, Ready):
         raise SystemExit(f"model not ready: {ready.stage.value} ({ready.reason})")
     print(f"model {run['model']['id']} ready (warm-up {ready.warmup_ms} ms)", file=out)
-    run["perf"] = [asdict(t) for t in await perf_trials(live, args.perf_trials, out)] if args.perf_trials else []
+    target = PerfTarget.of(args.base_url, args.token_file, run["model"]["id"], args.reasoning_effort)
+    run["perf"] = [asdict(t) for t in await perf_trials(target, args.perf_trials, out)] if args.perf_trials else []
     results = []
-    for rep in range(args.repeat):
+    for rep in range(0 if args.no_eval else args.repeat):
         for case in selected:
             result = await run_case(case, live, rep)
             mark = "ok  " if result.passed else "FAIL"
@@ -699,9 +805,15 @@ def main(argv: Sequence[str] | None = None, out: Any = sys.stdout) -> int:
     p_run.add_argument("--base-url", default="http://10.77.0.2:1234")
     p_run.add_argument("--token-file", type=Path, help="file holding the LM Studio API token (never the token itself)")
     p_run.add_argument("--model", help="model id; default: the one model loaded in LM Studio")
+    p_run.add_argument(
+        "--reasoning-effort",
+        choices=("none", "low", "medium", "high"),
+        help="sent with every request (default: not sent)",
+    )
     p_run.add_argument("--max-ctx", type=int, help="context length; default: what LM Studio reports as loaded")
     p_run.add_argument("--repeat", type=int, default=3, help="passes over the case set (default 3)")
     p_run.add_argument("--perf-trials", type=int, default=5)
+    p_run.add_argument("--no-eval", action="store_true", help="only the TTFT/decode trials")
     p_run.add_argument("--cases", type=lambda s: [x.strip() for x in s.split(",") if x.strip()], default=[])
     p_run.add_argument("--vram-mb", type=int, help="total GPU memory used with the model loaded (nvidia-smi)")
     p_run.add_argument("--note", help="free text for the report (LM Studio version, settings)")
