@@ -326,3 +326,39 @@ def test_contract_revisions_present() -> None:
     spec = yaml.safe_load((CONTRACTS / "hostd.v1.yaml").read_text(encoding="utf-8"))
     assert re.fullmatch(r"1\.\d+\.\d+", spec["info"]["version"])
     assert Path(CONTRACTS / "README.md").is_file()
+
+
+def _client_free_text(defs: dict[str, Any]) -> list[tuple[str, bool]]:
+    """(path, sensitive) for every free-text string a client sends: no pattern, enum or const."""
+    out: list[tuple[str, bool]] = []
+
+    def walk(node: Any, path: str, seen: frozenset[str]) -> None:
+        if not isinstance(node, dict):
+            return
+        if "$ref" in node:
+            name = node["$ref"].rsplit("/", 1)[-1]
+            if name not in seen:
+                walk(defs[name], name, seen | {name})
+            return
+        if node.get("type") == "string" and not {"pattern", "enum", "const"} & node.keys():
+            out.append((path, node.get("x-atlas-sensitive") is True))
+        for key, child in node.get("properties", {}).items():
+            walk(child, f"{path}.{key}", seen)
+        for combinator in ("anyOf", "oneOf", "allOf"):
+            for child in node.get(combinator, []):
+                walk(child, path, seen)
+        for branch in ("then", "else", "items"):
+            if branch in node:
+                walk(node[branch], path, seen)
+
+    walk(defs["ClientMessage"], "ClientMessage", frozenset({"ClientMessage"}))
+    return out
+
+
+def test_every_free_text_string_a_client_sends_is_sensitive() -> None:
+    """contracts/README.md (events.v1 1.2.0): what a person types is never logged. Found 2026-11-25 (text.input)."""
+    fields = _client_free_text(load_json("events.v1.schema.json")["$defs"])
+    assert ("TextInput.text", True) in fields
+    assert ("PortfolioUnlock.passphrase", True) in fields
+    # Envelope.type is the message type, not free text: ClientMessage restricts it to the enum of client types.
+    assert [path for path, sensitive in fields if not sensitive and path != "Envelope.type"] == []

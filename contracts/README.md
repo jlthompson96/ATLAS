@@ -50,7 +50,8 @@ Producers validate strictly against the schema, which is closed (`additionalProp
 - **Inactivity.** The server turns privacy on (`reason: inactivity`) after a device's inactivity window. Every client frame except `clock.ping` and `sync.request` resets it. The HUD sends `activity.ping` (empty payload, no reply) only on real pointer, touch or key input, at most once every 30 s; the server never rejects a faster one, it just resets the timer.
 - **Approvals are bound to what the user saw.** `action.pending.payload_canonical` is the exact JCS payload; `payload_sha256` is its SHA-256. The HUD recomputes the hash, refuses to offer Approve on a mismatch, and sends its own hash in `action.decide`. Approval also needs a step-up token (`stepup.verify` → `stepup.granted`, valid 60 s). Voice can never approve.
 - **Untrusted text.** Fields typed `UntrustedText` (`x-atlas-untrusted`) come from third parties. Render them as plain text only: never as HTML or Markdown, and never as a link or image source.
-- **Sensitive fields** (`x-atlas-sensitive`: `passphrase`, `pin`, `step_up_token`, `token`) are never logged. Use `redact_for_log()`.
+- **Sensitive fields** (`x-atlas-sensitive`: `passphrase`, `pin`, `step_up_token`, `token`, `text`) are never logged. Use `redact_for_log()`, which redacts a sensitive field's name wherever it appears in a frame.
+- **Every free-text string a client sends is sensitive.** Free text means a `string` with no `pattern`, `enum` or `const`, such as what the user typed (`text.input`). A contract test checks every `ClientMessage` payload (since events.v1 1.2.0).
 - **Money** is a decimal string, never a JSON number.
 - **Decoy tickers** (D22) never appear in `panel.update`.
 

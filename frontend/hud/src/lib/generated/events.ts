@@ -2,7 +2,7 @@
 // Source: contracts/events.v1.schema.json (via `npm run gen:types`).
 // A test and `npm run lint` fail if this file is stale.
 
-export const SCHEMA_REVISION = "1.1.0" as const;
+export const SCHEMA_REVISION = "1.2.0" as const;
 
 export const SERVER_TYPES = ["state.changed","audio.level","transcript.partial","transcript.final","assistant.delta","panel.update","host.status","task.progress","action.pending","action.resolved","alert","privacy.mode","clock.pong","sync.snapshot","stepup.granted","request.result"] as const;
 export type ServerType = (typeof SERVER_TYPES)[number];
@@ -10,7 +10,7 @@ export const CLIENT_TYPES = ["text.input","ptt.start","ptt.stop","action.decide"
 export type ClientType = (typeof CLIENT_TYPES)[number];
 
 /** Fields that must never be logged (x-atlas-sensitive). */
-export const SENSITIVE_KEYS: readonly string[] = ["passphrase","pin","step_up_token","token"];
+export const SENSITIVE_KEYS: readonly string[] = ["passphrase","pin","step_up_token","text","token"];
 
 export const STATE_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
   "idle": [
@@ -478,6 +478,7 @@ export type RequestResult = {
 export type Empty = Record<string, never>;
 
 export type TextInput = {
+  /** What the user typed. Content: never logged (redact_for_log; contracts/README.md, free-text client strings). */
   text: string;
 };
 
