@@ -25,7 +25,7 @@ The owner merged C's branch at `68d3945` before the second fix round. The review
 
 | ID | Severity | Blocks | Where | Problem | Agreed fix |
 |---|---|---|---|---|---|
-| R2 | Low | — | the Pi's kernel | Release code that a script runs on the admin's terminal could push keystrokes into it (`TIOCSTI`) if `dev.tty.legacy_tiocsti` is 1. The scripts on `feat/ui-on-pi` now give release code pipes only (`lib.sh` `ui_python`), so nothing current is exposed; the Debian VM has it at 0, the Pi's value is unchecked. | Check `sysctl dev.tty.legacy_tiocsti` on the Pi; if it is 1, set it to 0 in `base-os.sh` with a `check` line. |
+| R2 | Low | — | the Pi's kernel | Release code that a script runs on the admin's terminal could push keystrokes into it (`TIOCSTI`) if `dev.tty.legacy_tiocsti` is 1. The scripts on `feat/ui-on-pi` now give release code pipes only (`lib.sh` `ui_python`), so nothing current is exposed; the Debian VM has it at 0. **The Pi has it at 1** (checked 2026-11-25, window step 3). | Check `sysctl dev.tty.legacy_tiocsti` on the Pi; if it is 1, set it to 0 in `base-os.sh` with a `check` line. |
 
 ### Accepted (no fix planned)
 
