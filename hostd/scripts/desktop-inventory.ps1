@@ -182,5 +182,6 @@ Write-Output $text
 if ($OutFile) {
     $target = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutFile)
     [IO.File]::WriteAllText($target, $text + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
-    Write-Host "`nWritten to $target. Read it before sharing it."
+    # Only the file name: the full path names the user profile, and people paste this output (found on the first run).
+    Write-Host "`nWritten to $(Split-Path -Leaf $target). Read it before sharing it."
 }

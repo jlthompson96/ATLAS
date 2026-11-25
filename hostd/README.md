@@ -85,7 +85,7 @@ Copy the script to the desktop, open PowerShell **as administrator** (needed for
 powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop-inventory.ps1 -PiAddress <the Pi's LAN IP> -OutFile inventory.md
 ```
 
-Read `inventory.md` before sharing it (wake timers can name scheduled tasks), then save it as `docs/inventory/desktop-<date>.md`. `-ExecutionPolicy Bypass` covers this one process; the machine's policy doesn't change. The script has only been checked statically (`tests/test_inventory_script.py`: read-only commands, nothing identifying, 5.1 syntax). Its first real run is on the desktop.
+Read `inventory.md` before sharing it (wake timers can name scheduled tasks), then save it as `docs/inventory/desktop-<date>.md`. `-ExecutionPolicy Bypass` covers this one process; the machine's policy doesn't change. Checked statically by `tests/test_inventory_script.py` (read-only commands, nothing identifying, 5.1 syntax). First real run on the desktop 2026-11-25: [docs/inventory/desktop-2026-11-25.md](../docs/inventory/desktop-2026-11-25.md).
 
 ## Desktop firewall for the ATLAS link (Phase 1)
 
