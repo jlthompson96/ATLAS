@@ -58,7 +58,7 @@ credentials its job needs. Names, users, sockets and allowlists come from
 | Service | Role | Holds | Phase |
 |---|---|---|---|
 | **atlas-core** | Orchestrator, policy engine, task queue, state machine, wake controller | LM Studio token, approval-signing key | 1 |
-| **atlas-voice** | Wake word ("Hey Atlas"), VAD, speech-to-text, text-to-speech | nothing | 3 |
+| **atlas-voice** | Speech-to-text and text-to-speech for tap-to-talk in the HUD, using the phone's or computer's microphone ([ADR 0003](docs/adr/0003-voice-from-client-device.md)); a room microphone with "Hey Atlas" can come later | nothing | 3 |
 | **atlas-ui** | Serves the HUD and its one WebSocket; TLS, device pairing | TLS key, device-token key, PIN hash | 2 |
 | **atlas-audit** | Append-only, hash-chained audit log | checkpoint signing key | 0 |
 | **atlas-egress** | **The only process allowed to reach the internet** | nothing | 0–1 |
@@ -87,7 +87,7 @@ flowchart LR
   end
 
   subgraph pi["Raspberry Pi 5 — trust anchor, always on"]
-    voice["atlas-voice<br/>wake word · VAD · STT · TTS"]
+    voice["atlas-voice<br/>VAD · STT · TTS"]
     core["atlas-core<br/>orchestrator · policy engine<br/>queue · state machine"]
     ui["atlas-ui<br/>HUD + /ws/events"]
     readers["Readers<br/>atlas-google · atlas-discord<br/>atlas-panels · atlas-market"]
@@ -272,7 +272,7 @@ Every phase ends with an ADR and recorded benchmarks.
 | 0 | Pi provisioning, read-only root, backups, audit skeleton | 20 power cuts with no corruption; restore to the spare card; 24 h writes ≤ 100 MB/day |
 | 1 | WireGuard link, Wake-on-LAN, text-only agent | Cold start p50 ≤ 30 s and p95 ≤ 60 s over 30 trials; a model chosen in an ADR |
 | 2 | HUD shell, `atlas-ui`, Chromium kiosk | Every state distinct with text labels; kiosk within budget in lite mode; remote browser at 60 fps |
-| 3 | Voice, wired to the animation | Warm end-to-end p50 ≤ 3.0 s over 100 utterances; 24 h wake-word soak |
+| 3 | Voice (tap-to-talk from the HUD), wired to the animation | Warm end-to-end p50 ≤ 3.0 s over 100 utterances |
 | 4 | Email, Discord, weather, calendar, market and portfolio (read-only) | No red-team case leads to anything beyond read or propose; egress allowlist frozen |
 | 5 | Research, SearXNG, the off-hours queue | 7 nights of scheduled runs with correct sleep and wake and no policy violations |
 | 6 | Write actions with approvals | AP-1..4 pass; a 2-week supervised trial signed off |
