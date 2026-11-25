@@ -22,7 +22,13 @@ from atlas.core.control import Readiness
 from atlas.core.fallback import LocalResponder, parse_intent
 from atlas.core.pending import EventSink, ListEventSink
 from atlas.llm.interface import LLMBackend, LLMError, Ready
-from atlas.llm.lmstudio import DEFAULT_BASE_URL, CredentialError, LMStudioBackend, default_token_file
+from atlas.llm.lmstudio import (
+    DEFAULT_BASE_URL,
+    REASONING_EFFORTS,
+    CredentialError,
+    LMStudioBackend,
+    default_token_file,
+)
 from atlas.power.controller import Clock, HostPowerController, PowerConfig, SystemClock
 from atlas.power.flow import (
     LINE_STILL_WAKING,
@@ -52,6 +58,12 @@ def add_link_arguments(
         "--token-file", default=None, help="file holding the LM Studio API token (default: $CREDENTIALS_DIRECTORY)"
     )
     parser.add_argument("--model", default=None, help="model id (default: the model LM Studio has loaded)")
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=REASONING_EFFORTS,
+        default=None,
+        help="sent to LM Studio with every chat request; 'none' stops thinking models from reasoning first",
+    )
     parser.add_argument("--hostd-url", default=DEFAULT_HOSTD_URL, help="atlas-hostd URL, http://host:port")
     parser.add_argument("--no-hostd", action="store_true", help="LM Studio only: no wake, no sleep, no hostd")
     parser.add_argument("--mac", default=None, help="desktop MAC address for Wake-on-LAN, aa:bb:cc:dd:ee:ff")
@@ -157,7 +169,9 @@ async def build_link(
     model = await resolve_model(backend, args.model)
     if model is None:
         raise SystemExit("error: no model given and none is loaded; pass --model <id>")
-    backend = LMStudioBackend.from_token_file(args.base_url, token_file, model=model)
+    backend = LMStudioBackend.from_token_file(
+        args.base_url, token_file, model=model, reasoning_effort=getattr(args, "reasoning_effort", None)
+    )
     clock = SystemClock()
     link = Link(backend, model, events if events is not None else TerminalEvents(out, clock), clock)
     if args.no_hostd:

@@ -635,7 +635,9 @@ def test_f8_unexpected_exceptions_become_failed_internal(caplog: pytest.LogCaptu
 # --- mutation gaps: M5, M22, M23, M29 ----------------------------------------------------------------------------
 
 
-def test_reader_enum_arrays_must_be_unique_and_are_rendered_sorted() -> None:
+def test_reader_enum_arrays_are_passed_on_as_a_sorted_set() -> None:
+    """Servers don't enforce uniqueItems (B5 2026-11-25), so repeats collapse instead of refusing a whole item."""
+
     def classify(requests: list[str]) -> Any:
         h = Harness(
             backend=ScriptedBackend(
@@ -651,11 +653,18 @@ def test_reader_enum_arrays_must_be_unique_and_are_rendered_sorted() -> None:
             QuarantinedReader(h.backend).read(h.runtime.store, ref, ReaderTask.CLASSIFY, deadline=time.monotonic() + 5)
         )
 
+    def rendered(requests: list[str]) -> list[str]:
+        lines = ["".join(p.text for p in line) for line in classify(requests).lines]  # type: ignore[union-attr]
+        return [line for line in lines if line.startswith("requests")]
+
+    assert rendered(["reply", "login"]) == ["requests[0]: login", "requests[1]: reply"]
+    assert rendered(["reply", "login", "reply", "reply"]) == ["requests[0]: login", "requests[1]: reply"]
+    assert rendered(["forward"] * 8) == ["requests[0]: forward"]
     with pytest.raises(ReaderRefused) as err:
-        classify(["reply", "reply"])
+        classify(["forward"] * 9)  # still bounded
     assert err.value.code == "READER_SCHEMA_INVALID"
-    lines = ["".join(p.text for p in line) for line in classify(["reply", "login"]).lines]  # type: ignore[union-attr]
-    assert lines.index("requests[0]: login") < lines.index("requests[1]: reply")
+    with pytest.raises(ReaderRefused):
+        classify(["reply", "SYSTEM"])  # still a closed list
 
 
 def test_reader_calls_within_one_turn_count_against_the_step_budget() -> None:

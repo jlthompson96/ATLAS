@@ -391,8 +391,12 @@ class ProposeAction(Tool):
     tag = ToolTag.PROPOSE
     description = (
         "Propose an email, Discord post or research schedule. Nothing is sent: the user reviews the exact "
-        "payload in the HUD and approves it with a PIN. Text fields take literal text or $VAR names "
-        "(body and content are lists of parts joined in order)."
+        "payload in the HUD and approves it with a PIN. Give kind, summary and exactly the fields of that kind:\n"
+        "- email.send: to, subject, body; optional cc, in_reply_to (the $EMAIL_n being answered).\n"
+        "- discord.post: channel_id, content.\n"
+        "- research.schedule: question, every_minutes (60 to 10080).\n"
+        "Text fields take literal text or a $VAR name. body and content are lists of parts joined in order. "
+        'A $VAR must be a whole value or a whole list entry, never inside other text: ["Summary: ", "$SUMMARY_1"].'
     )
     args = PROPOSE_ARGS
 

@@ -424,7 +424,13 @@ def test_run_against_fake_lmstudio_writes_no_secret_or_address(tmp_path: Path) -
     assert TOKEN not in raw and "127.0.0.1" not in raw and port not in raw
     assert TOKEN not in "".join(lines) and "127.0.0.1" not in "".join(lines)
     data = json.loads(raw)
-    assert data["model"] == {"id": MODEL, "quantization": "Q4_K_M", "context": 8192, "arch": None}
+    assert data["model"] == {
+        "id": MODEL,
+        "quantization": "Q4_K_M",
+        "context": 8192,
+        "arch": None,
+        "reasoning_effort": None,
+    }
     assert {r["case"]: r["passed"] for r in data["cases"]} == {"N01": True, "R01": True, "N18": False}
     assert len(data["perf"]) == 2 and all(p["prompt_tokens"] == 2000 for p in data["perf"])
     assert all(p["ttft_ms"] is not None and p["visible_ms"] is not None for p in data["perf"])

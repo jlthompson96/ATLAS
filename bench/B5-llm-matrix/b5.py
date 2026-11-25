@@ -32,6 +32,7 @@ import math
 import random
 import re
 import secrets
+import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -472,13 +473,14 @@ class PerfTarget:
     endpoint: Endpoint
     headers: Mapping[str, str]
     model: str
+    reasoning_effort: str | None = None
 
     @classmethod
-    def of(cls, base_url: str, token_file: Path | None, model: str) -> PerfTarget:
+    def of(cls, base_url: str, token_file: Path | None, model: str, reasoning_effort: str | None = None) -> PerfTarget:
         headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
         if token_file is not None:
             headers["Authorization"] = f"Bearer {read_token_file(token_file)}"
-        return cls(parse_http_url(base_url), headers, model)
+        return cls(parse_http_url(base_url), headers, model, reasoning_effort)
 
     def __repr__(self) -> str:  # never show headers
         return f"PerfTarget({self.model})"
@@ -494,6 +496,8 @@ async def perf_trial(
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if target.reasoning_effort is not None:
+        payload["reasoning_effort"] = target.reasoning_effort
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     started = clock()
     first: float | None = None
@@ -574,6 +578,28 @@ def percentile(values: Sequence[float], p: float) -> float | None:
     return ordered[rank - 1]
 
 
+def atlas_revision() -> str:
+    """The commit the run used (the prompts and tool descriptions are ATLAS code), plus "-dirty" if changed."""
+    try:
+        sha = subprocess.run(  # noqa: S603 - fixed arguments
+            ["git", "-C", str(HERE), "rev-parse", "--short=12", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        ).stdout.strip()
+        dirty = subprocess.run(  # noqa: S603
+            ["git", "-C", str(HERE.parents[1]), "status", "--porcelain", "--", "backend/atlas", "bench/B5-llm-matrix"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return sha + ("-dirty" if dirty else "")
+
+
 def cases_digest() -> str:
     """Identifies the eval set, so runs on different case versions aren't compared by mistake."""
     src = inspect.getsource(case_set)
@@ -646,9 +672,10 @@ def report(runs: Sequence[Mapping[str, Any]]) -> str:
         m = run.get("model", {})
         misses = [k for k, v in s["checks"].items() if v is not True]
         verdict = "meets B5" if s["meets"] else "misses: " + ", ".join(f"{k} ({_mark(s['checks'][k])})" for k in misses)
+        effort = f" (reasoning_effort {m['reasoning_effort']})" if m.get("reasoning_effort") else ""
         acc = "n/a" if s["accuracy"] is None else f"{s['passed']}/{s['total']} ({s['accuracy']:.0%})"
         lines.append(
-            f"| `{m.get('id', '?')}` | {m.get('quantization') or 'n/a'} | {_fmt(m.get('context'))} | {acc} | "
+            f"| `{m.get('id', '?')}`{effort} | {m.get('quantization') or 'n/a'} | {_fmt(m.get('context'))} | {acc} | "
             f"{s['normal'][0]}/{s['normal'][1]} | {s['injection'][0]}/{s['injection'][1]} | "
             f"{_fmt(s['ttft_p50'], ' ms')} / {_fmt(s['ttft_p95'], ' ms')} ({_fmt(s['prompt_tokens'])} tok) | "
             f"{_fmt(s['visible_p50'], ' ms')} ({s['reasoning']}) | {_fmt(s['tps_p50'], ' tok/s')} | {_fmt(s['step_p50'], ' ms')} / {_fmt(s['step_p95'], ' ms')} | "
@@ -711,6 +738,7 @@ async def run_all(args: argparse.Namespace, out: Any) -> dict[str, Any]:
         "started": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "harness": {
             "cases_digest": cases_digest(),
+            "atlas": atlas_revision(),
             "repeat": 0 if args.no_eval else args.repeat,
             "cases": 0 if args.no_eval else len(selected),
         },
@@ -734,12 +762,19 @@ async def run_all(args: argparse.Namespace, out: Any) -> dict[str, Any]:
     # The reader sizes item text from the context window, so use the one the model was loaded with.
     max_ctx = args.max_ctx or run["model"]["context"] or 16_384
     run["model"]["context"] = max_ctx
-    live = LMStudioBackend.from_token_file(args.base_url, args.token_file, model=run["model"]["id"], max_ctx=max_ctx)
+    run["model"]["reasoning_effort"] = args.reasoning_effort
+    live = LMStudioBackend.from_token_file(
+        args.base_url,
+        args.token_file,
+        model=run["model"]["id"],
+        max_ctx=max_ctx,
+        reasoning_effort=args.reasoning_effort,
+    )
     ready = await live.ensure_ready(run["model"]["id"], time.monotonic() + 120.0)
     if not isinstance(ready, Ready):
         raise SystemExit(f"model not ready: {ready.stage.value} ({ready.reason})")
     print(f"model {run['model']['id']} ready (warm-up {ready.warmup_ms} ms)", file=out)
-    target = PerfTarget.of(args.base_url, args.token_file, run["model"]["id"])
+    target = PerfTarget.of(args.base_url, args.token_file, run["model"]["id"], args.reasoning_effort)
     run["perf"] = [asdict(t) for t in await perf_trials(target, args.perf_trials, out)] if args.perf_trials else []
     results = []
     for rep in range(0 if args.no_eval else args.repeat):
@@ -770,6 +805,11 @@ def main(argv: Sequence[str] | None = None, out: Any = sys.stdout) -> int:
     p_run.add_argument("--base-url", default="http://10.77.0.2:1234")
     p_run.add_argument("--token-file", type=Path, help="file holding the LM Studio API token (never the token itself)")
     p_run.add_argument("--model", help="model id; default: the one model loaded in LM Studio")
+    p_run.add_argument(
+        "--reasoning-effort",
+        choices=("none", "low", "medium", "high"),
+        help="sent with every request (default: not sent)",
+    )
     p_run.add_argument("--max-ctx", type=int, help="context length; default: what LM Studio reports as loaded")
     p_run.add_argument("--repeat", type=int, default=3, help="passes over the case set (default 3)")
     p_run.add_argument("--perf-trials", type=int, default=5)

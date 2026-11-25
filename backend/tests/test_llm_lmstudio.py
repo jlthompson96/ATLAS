@@ -471,3 +471,24 @@ def test_capabilities_and_default_url() -> None:
     caps = b.capabilities()
     assert caps.tools and caps.json_schema and caps.streaming and caps.max_ctx == 16384
     assert json.dumps(caps.max_ctx)
+
+
+# --- reasoning_effort (B5 2026-11-25: Gemma 4 E4B thinks unless told "none") ------------------------------------------
+
+
+def test_reasoning_effort_is_sent_only_when_configured() -> None:
+    async def body(server: FakeServer, backend: LMStudioBackend) -> None:
+        await collect(backend.chat(USER, max_tokens=8, deadline=deadline()))
+        assert "reasoning_effort" not in server.requests[-1].json()
+        thrifty = LMStudioBackend(server.url, token=TOKEN, model=MODEL, reasoning_effort="none")
+        await collect(thrifty.chat(USER, max_tokens=8, deadline=deadline()))
+        await collect(thrifty.chat(USER, max_tokens=8, response_schema={"type": "object"}, deadline=deadline()))
+        assert [r.json()["reasoning_effort"] for r in server.requests[-2:]] == ["none", "none"]
+
+    run(with_server(lmstudio(lambda r: text_stream("{}")), body))
+
+
+@pytest.mark.parametrize("effort", ["off", "", "NONE", "minimal"])
+def test_unknown_reasoning_effort_is_refused(effort: str) -> None:
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        LMStudioBackend("http://127.0.0.1:1234", reasoning_effort=effort)

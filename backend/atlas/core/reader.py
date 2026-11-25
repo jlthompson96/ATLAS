@@ -9,7 +9,7 @@ The output must be JSON matching the task's fixed schema (``atlas.core.schema``)
 length caps, enums wherever the answer can be an enum. Then:
 
 * enum, integer and boolean fields become trusted values the planner may see (a choice from a closed
-  list carries no instructions);
+  list carries no instructions); a list of enums is passed on as a sorted set;
 * every free-text field becomes a tainted ``$VAR`` with the item's provenance;
 * anything else (tool calls, extra keys, wrong types, over-long text, non-JSON, a second JSON value)
   refuses the whole result. Nothing is repaired or guessed.
@@ -61,7 +61,8 @@ _SCHEMAS: Final[dict[ReaderTask, Obj]] = {
         {
             "category": Enum(CATEGORIES),
             "suspicious": Bool(),
-            "requests": Array(Enum(REQUEST_KINDS), max_items=4, unique=True),
+            # Not unique=True: servers don't enforce uniqueItems, and repeats are collapsed in _convert.
+            "requests": Array(Enum(REQUEST_KINDS), max_items=len(REQUEST_KINDS)),
             "link_count": Int(0, 1000),
         },
         required=frozenset({"category", "suspicious", "requests", "link_count"}),
@@ -228,7 +229,8 @@ def _convert(
         if not value:
             lines.append((gen("{path}: (none)", path=path),))
         if isinstance(spec.item, Enum):
-            value = sorted(value)  # the order the reader chose is not passed on (covert-channel reduction)
+            # A set: the order and repeats the reader chose are not passed on (covert-channel reduction).
+            value = sorted(set(value))
         for i, element in enumerate(value):
             _convert(spec.item, element, f"{path}[{i}]", store, item, refs, lines)
         return

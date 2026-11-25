@@ -61,6 +61,9 @@ MAX_TOOL_CALLS: Final = 32
 MAX_TOOL_ARGS_CHARS: Final = 64 * 1024
 MAX_TOOL_NAME_CHARS: Final = 128
 WARMUP_PROMPT: Final = "ping"
+# OpenAI-style ``reasoning_effort``. LM Studio 0.4.28 honours "none" for Gemma 4 E4B (no reasoning tokens);
+# other values left it thinking in full (bench/results/B5-2026-11-25.md). None: the field is not sent.
+REASONING_EFFORTS: Final = ("none", "low", "medium", "high")
 
 
 class CredentialError(ValueError):
@@ -141,7 +144,10 @@ class LMStudioBackend(LLMBackend):
         model: str | None = None,
         max_ctx: int = 16_384,
         request_timeout_s: float = DEFAULT_REQUEST_TIMEOUT_S,
+        reasoning_effort: str | None = None,
     ) -> None:
+        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
+            raise ValueError(f"reasoning_effort must be one of {', '.join(REASONING_EFFORTS)}")
         self._endpoint: Endpoint = parse_http_url(base_url)
         self._headers: dict[str, str] = {"Accept": "application/json"}
         if token is not None:
@@ -149,6 +155,7 @@ class LMStudioBackend(LLMBackend):
         self._model = model
         self._max_ctx = max_ctx
         self._timeout = request_timeout_s
+        self._reasoning_effort = reasoning_effort
 
     @classmethod
     def from_token_file(cls, base_url: str, token_file: Path | str | None, **kwargs: Any) -> LMStudioBackend:
@@ -246,6 +253,8 @@ class LMStudioBackend(LLMBackend):
         }
         if self._model is not None:
             payload["model"] = self._model
+        if self._reasoning_effort is not None:
+            payload["reasoning_effort"] = self._reasoning_effort
         if tools:
             payload["tools"] = [
                 {

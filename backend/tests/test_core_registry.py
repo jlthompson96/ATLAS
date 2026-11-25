@@ -169,3 +169,21 @@ def test_the_planner_side_has_no_handle_on_approvals() -> None:
             name
         )
     assert atlas.__name__ == "atlas"
+
+
+def test_propose_action_description_names_every_field_of_every_kind() -> None:
+    """Small models leave out fields the flat schema doesn't mark required (B5 2026-11-25); the description says."""
+    from atlas.core.pending import _KIND_FIELDS
+    from atlas.core.tools import ProposeAction
+
+    lines = ProposeAction.description.splitlines()
+    for kind, (required, optional) in _KIND_FIELDS.items():
+        (line,) = [ln for ln in lines if ln.startswith(f"- {kind}:")]
+        for name in required | optional:
+            assert name in line, (kind, name)
+        for name in optional:
+            assert line.index("optional") < line.index(name), (kind, name)
+    props = ProposeAction.args.json_schema()["properties"]
+    for kind, (required, _) in _KIND_FIELDS.items():
+        for name in required:
+            assert props[name]["description"].startswith(f"{kind} (required)"), name
