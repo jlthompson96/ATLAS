@@ -52,6 +52,25 @@ def valid_email(address: Any) -> bool:
     return isinstance(address, str) and len(address) <= 254 and EMAIL_RE.fullmatch(address) is not None
 
 
+_MAILBOX: Final = re.compile(r"[^<>]*<([^<>\s]{3,254})>")
+
+
+def mailbox_address(raw: str) -> str | None:
+    """The address in a mailbox as an email header gives it: ``addr`` or ``Display Name <addr>``.
+
+    Strict like ``EMAIL_RE``: exactly one ``<...>``, at the end, holding a valid address; anything else
+    (several addresses, groups, comments, brackets in the name) is ``None``. The display name is
+    attacker-controlled and dropped; approval shows the bare address (RT-14).
+    """
+    text = raw.strip()
+    if valid_email(text):
+        return text
+    match = _MAILBOX.fullmatch(text)
+    if match is None or not valid_email(match.group(1)):
+        return None
+    return match.group(1)
+
+
 def _invisible(ch: str) -> bool:
     """Control (Cc) and format (Cf) characters other than newline and tab: ESC, bidi overrides, zero-width."""
     return ch not in "\n\t" and unicodedata.category(ch) in ("Cc", "Cf")

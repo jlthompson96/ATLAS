@@ -45,11 +45,16 @@ from atlas.policy.types import Context, ToolTag
 
 
 class ToolError(Exception):
-    """A tool call that can't proceed. ``code`` is UPPER_SNAKE and safe to show the planner."""
+    """A tool call that can't proceed. ``code`` is UPPER_SNAKE and safe to show the planner.
 
-    def __init__(self, code: str) -> None:
+    ``detail`` says what to fix, built only from ATLAS constants such as field and kind names, so the
+    model can correct the call in the same request. The audit record keeps the code only.
+    """
+
+    def __init__(self, code: str, detail: str = "") -> None:
         super().__init__(code)
         self.code = code
+        self.detail = detail
 
 
 @dataclass
@@ -409,7 +414,7 @@ class ProposeAction(Tool):
         try:
             draft = draft_payload(args, rc.store, self._labels)
         except DraftError as exc:
-            raise ToolError(exc.code) from None
+            raise ToolError(exc.code, exc.detail) from None
         return Prepared(draft.args, draft.action, draft)
 
     async def run(self, args: Mapping[str, Any], prepared: Prepared, decision: Decision, rc: RequestCtx) -> ToolOutput:
