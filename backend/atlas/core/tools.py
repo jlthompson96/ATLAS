@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, ClassVar, Final
 
 from atlas.core.auditing import AuditSink, DataRef, tool_call_record
@@ -138,18 +138,42 @@ def _iso(ms: int) -> str:
 # --- read tools ------------------------------------------------------------------------------------
 
 
+def _utc_offset(offset: timedelta | None) -> str:
+    minutes = int((offset or timedelta()).total_seconds()) // 60
+    sign = "-" if minutes < 0 else "+"
+    return f"UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+
 class GetTime(Tool):
+    """The time as a person reads it, in the Pi's own time zone, plus UTC for precision.
+
+    A model shown only UTC would tell the owner the wrong hour: it doesn't know where the Pi is.
+    """
+
     name = "get_time"
     tag = ToolTag.READ
-    description = "Current date and time (UTC)."
+    description = "Current local date and time, with the time zone and UTC offset, and the same moment in UTC."
     args = Obj({})
 
-    def __init__(self, clock_ms: Callable[[], int]) -> None:
+    def __init__(self, clock_ms: Callable[[], int], tz: tzinfo | None = None) -> None:
         self._clock = clock_ms
+        self._tz = tz  # None: the system's zone (/etc/localtime on the Pi)
 
     async def run(self, args: Mapping[str, Any], prepared: Prepared, decision: Decision, rc: RequestCtx) -> ToolOutput:
-        now = datetime.fromtimestamp(self._clock() / 1000, UTC)
-        return text_output(gen("now: {now}", now=now.strftime("%Y-%m-%dT%H:%M:%SZ (%A)")))
+        utc = datetime.fromtimestamp(self._clock() / 1000, UTC)
+        local = utc.astimezone(self._tz)
+        clock = f"{local.hour % 12 or 12}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
+        day = f"{local:%A}, {local:%B} {local.day}, {local.year}"
+        return text_output(
+            gen(
+                "now: {clock}, {day} ({zone}, {offset}); UTC {utc}",
+                clock=clock,
+                day=day,
+                zone=local.tzname() or "local",
+                offset=_utc_offset(local.utcoffset()),
+                utc=utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+        )
 
 
 _SOURCE_PREFIX: Final = {
