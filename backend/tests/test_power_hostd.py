@@ -99,8 +99,17 @@ def test_gpu_report_and_missing_nvml() -> None:
     async def ok(server: FakeServer, client: HostdClient) -> None:
         gpu = await client.gpu()
         assert gpu is not None and gpu.vram_free_mb == 6992 and gpu.foreign_vram_mb == 1200
+        assert (gpu.vram_used_mb, gpu.util_pct, gpu.temp_c) == (1200, 3, 40)  # for the HUD's System panel
 
     run(with_hostd({("GET", "/v1/gpu"): Reply.of_json(GPU)}, ok))
+
+    async def odd(server: FakeServer, client: HostdClient) -> None:
+        gpu = await client.gpu()
+        assert gpu is not None and gpu.vram_free_mb == 6992  # the wake check still has what it needs
+        assert (gpu.vram_used_mb, gpu.util_pct, gpu.temp_c) == (None, None, None)  # never guessed
+
+    bad = {**GPU, "util_pct": 250, "temp_c": "hot", "vram_used_mb": True}
+    run(with_hostd({("GET", "/v1/gpu"): Reply.of_json(bad)}, odd))
 
     async def no_nvml(server: FakeServer, client: HostdClient) -> None:
         assert await client.gpu() is None

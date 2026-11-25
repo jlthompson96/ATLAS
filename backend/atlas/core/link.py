@@ -33,7 +33,7 @@ from atlas.power.flow import (
     RequestQueue,
     emit_state,
 )
-from atlas.power.hostd import DEFAULT_HOSTD_URL, HostdClient
+from atlas.power.hostd import DEFAULT_HOSTD_URL, HostdApi, HostdClient
 from atlas.power.interface import SleepAccepted, SleepReason, SleepRefused, WakeReason
 from atlas.power.wol import DEFAULT_BROADCAST, DEFAULT_PORT, UdpWolSender
 
@@ -101,6 +101,7 @@ class Link:
     clock: Clock
     controller: HostPowerController | None = None
     gate: HostGate | None = None
+    hostd: HostdApi | None = None  # also read by the host.status publisher (GPU telemetry)
 
     async def ensure_ready(self, text: str | None, reason: WakeReason = WakeReason.INTERACTIVE) -> str | None:
         """``None`` when the model is ready, else the line to show the user (and the request is queued)."""
@@ -167,6 +168,7 @@ async def build_link(
     except ValueError as exc:
         raise SystemExit(f"error: {exc}") from None
     queue = RequestQueue(clock)
+    link.hostd = hostd
     link.controller = HostPowerController(
         hostd, sender, audit, clock=clock, config=PowerConfig(), queue_busy=lambda: False
     )

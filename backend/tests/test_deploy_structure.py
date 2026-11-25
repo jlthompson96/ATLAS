@@ -734,3 +734,20 @@ def test_deploy_tarball_carries_no_macos_metadata(tmp_path: Path) -> None:
     fixed = [tar, "--no-xattrs", "--no-mac-metadata", "-cf", str(new), "-C", str(stage), "."]
     subprocess.run(fixed, check=True, env=env)  # noqa: S603
     assert _apple_double(new) == []
+
+
+def test_only_atlas_core_reads_system_wide_proc() -> None:
+    """ProcSubset=pid everywhere but atlas-core, which reads the Pi's counters for host.status (2026-11-25).
+
+    ProtectProc=invisible stays on every unit, atlas-core included: other processes stay hidden.
+    """
+    for unit in sorted(SYSTEMD.glob("atlas-*.service")):
+        if unit.name == "atlas-backup-mount.service":
+            continue  # root helper with no namespacing on purpose: a private mount namespace hid its mount (ADR 0002)
+        settings = [line.strip() for line in unit.read_text().splitlines() if not line.lstrip().startswith("#")]
+        assert "ProtectProc=invisible" in settings, unit.name
+        if unit.name == "atlas-core.service":
+            assert not any(s.startswith("ProcSubset=") for s in settings)
+            assert "RELAXED (not baseline): no ProcSubset=pid" in unit.read_text()
+        elif any(s.startswith("ProtectProc=") for s in settings):
+            assert "ProcSubset=pid" in settings, unit.name
