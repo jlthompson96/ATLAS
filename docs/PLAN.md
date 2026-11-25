@@ -79,8 +79,8 @@ Service identifiers: `atlas-core`, `atlas-voice`, `atlas-egress`, `atlas-audit`,
 | Stated fact | Status | Phase 0 check |
 |---|---|---|
 | Pi 5, ARM64, 8 GB, boots from microSD | Unverified | Inventory script output stored in `docs/inventory/`. |
-| LLM host 8 GB VRAM, 64 GB RAM | Unverified | `nvidia-smi`, OS memory report. |
-| LLM host supports WoL | Unverified, **high risk** | Benchmark B6 (§2.13). |
+| LLM host 8 GB VRAM, 64 GB RAM | **Verified 2026-11-25:** RTX 4060 Ti 8 GB (8188 MiB), 64 GiB ([inventory](inventory/desktop-2026-11-25.md)) | `nvidia-smi`, OS memory report. |
+| LLM host supports WoL | Unverified, **high risk**. 2026-11-25: S3 (no Modern Standby), wired NIC wake-armed, same L2 segment; Fast Startup and wake-on-pattern still to turn off ([inventory](inventory/desktop-2026-11-25.md)) | Benchmark B6 (§2.13). |
 | Cooling unspecified | Mismatch with the requirement. The Pi 5 throttles under sustained load without cooling [S19]. | Recommend the Active Cooler (R-HW2). |
 | Audio hardware undecided | **Resolved (rev 2):** USB conference speakerphone. **Changed 2026-11-25 ([ADR 0003](adr/0003-voice-from-client-device.md)):** the client device's microphone, tap-to-talk; no audio hardware on the Pi for now. | Phase 3 settles codec and transport. |
 

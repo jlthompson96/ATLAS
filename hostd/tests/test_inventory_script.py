@@ -20,7 +20,7 @@ ALLOWED_COMMANDS = {
     "Get-ItemProperty", "Get-CimInstance", "Get-UICulture", "Get-PhysicalDisk", "Get-NetAdapter",
     "Get-NetAdapterPowerManagement", "Get-NetAdapterAdvancedProperty", "Get-NetNeighbor", "Get-Command", "Get-Item",
     "Get-Date", "Test-Connection", "Test-Path", "Select-Object", "Where-Object", "Sort-Object", "Measure-Object",
-    "Join-Path", "New-Object", "Write-Output", "Write-Host", "Confirm-SecureBootUEFI",
+    "Join-Path", "Split-Path", "New-Object", "Write-Output", "Write-Host", "Confirm-SecureBootUEFI",
 }  # fmt: skip
 
 
@@ -68,3 +68,15 @@ def test_runs_on_windows_powershell_51() -> None:
 def test_report_states_what_it_leaves_out() -> None:
     assert NOTE in CODE
     assert "Read it before sharing it" in CODE
+
+
+def test_console_output_never_shows_the_output_path() -> None:
+    """The full -OutFile path names the user profile (C:\\Users\\<name>\\...), and people paste the console output.
+
+    Found on the first real run (2026-11-25): only the file name is printed.
+    """
+    host_lines = [line for line in TEXT.splitlines() if "Write-Host" in line]
+    assert host_lines
+    for line in host_lines:
+        assert "$target" not in line.replace("Split-Path -Leaf $target", ""), line
+        assert "$OutFile" not in line, line
