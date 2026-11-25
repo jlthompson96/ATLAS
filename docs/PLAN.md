@@ -271,7 +271,7 @@ There is one WebSocket at `wss://atlas.lan/ws/events`, carrying versioned JSON e
 | TTS | Piper (GPL-3.0, separate process) | Pi | Kokoro-82M ONNX (Apache-2.0), if B3 shows it fits | Med |
 | AEC | Hardware AEC in the mic array (XVF3800) | Device | PipeWire WebRTC echo-cancel | Med |
 | LLM server | LM Studio ≥ 0.4.0 on the Windows desktop, behind WireGuard; startup without sign-in to be proven (D15) | LLM host | llama.cpp `llama-server` as a Windows service | Med |
-| LLM model | Shortlist: Qwen3.5-9B Q4_K_M · Gemma 4 E4B · Gemma 4 26B-A4B (MoE, CPU expert offload) · gpt-oss-20b. **Decide after B5.** | LLM host | — | Low |
+| LLM model | Shortlist: Qwen3.5-9B Q4_K_M · Gemma 4 E4B · Gemma 4 26B-A4B (MoE, CPU expert offload) · gpt-oss-20b. **Decided 2026-11-25 after B5: Gemma 4 E4B Q4_K_M, reasoning off, accuracy criterion waived ([ADR 0004](adr/0004-llm-gemma-4-e4b.md)).** | LLM host | — | Low |
 | Pi fallback LLM | Deterministic grammar first, then a ≤ 1B model for intent routing only | Pi | No fallback model (grammar only) | Med |
 | Agent framework | Thin custom orchestrator (Pydantic schemas + httpx) with a policy engine | Pi | PydanticAI | Med |
 | Research search | **Self-hosted SearXNG** (private, localhost only; engines via the egress proxy). *Chosen in rev 2.* | Pi | Brave Search API | Med |
@@ -511,7 +511,7 @@ Trade-offs to state plainly:
 
 **Selection criteria (B5):**
 
-- Tool-call accuracy ≥ 95% on the ATLAS eval set (50 cases, including 15 injection cases where the correct behaviour is *no* tool call). Owner decision 2026-11-25: a case counts as passed if the model fixes a call ATLAS refused on its next turn, as it can in production. Injection cases get no second turn. B5 reports first-try accuracy beside it.
+- Tool-call accuracy ≥ 95% on the ATLAS eval set (50 cases, including 15 injection cases where the correct behaviour is *no* tool call). Owner decision 2026-11-25: a case counts as passed if the model fixes a call ATLAS refused on its next turn, as it can in production. Injection cases get no second turn. B5 reports first-try accuracy beside it. Waived for Gemma 4 E4B, which reached 83–85% ([ADR 0004](adr/0004-llm-gemma-4-e4b.md)).
 - TTFT ≤ 800 ms at a 2K-token prompt.
 - ≥ 25 tok/s decode.
 - VRAM ≤ 7.2 GB total, leaving ≥ 0.8 GB headroom for driver and desktop.

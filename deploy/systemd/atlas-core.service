@@ -84,6 +84,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/var/lib/atlas/current/backend
 
 # --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
+# Once the desktop is linked (ADR 0004): add --backend lmstudio --model google/gemma-4-e4b --reasoning-effort none
 ExecStart=/var/lib/atlas/current/venv/atlas-core/bin/python -m atlas.core
 Restart=on-failure
 RestartSec=2

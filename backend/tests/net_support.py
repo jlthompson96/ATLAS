@@ -37,6 +37,7 @@ class Reply:
     chunks: Sequence[bytes] | None = None
     truncate: bool = False
     stall: bool = False
+    hang_after_chunks: bool = False  # send ``chunks``, then neither more data nor the end of the body
     headers: dict[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -93,6 +94,9 @@ class FakeServer:
                     writer.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
                     await writer.drain()
                     await asyncio.sleep(0)
+                if reply.hang_after_chunks:
+                    await reader.read()  # until the client gives up and hangs up
+                    return
                 if not reply.truncate:
                     writer.write(b"0\r\n\r\n")
             await writer.drain()
