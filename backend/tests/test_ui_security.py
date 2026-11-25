@@ -19,6 +19,7 @@ from atlas.ui_server.security import (
     default_origins,
     host_allowed,
     origin_allowed,
+    same_origin_request,
 )
 from tests.ui_support import Stack
 
@@ -92,6 +93,29 @@ def test_ui_sec_2_cross_origin_pairing_is_refused() -> None:
     run(go())
 
 
+def test_the_pairing_page_itself_can_pair_without_an_origin() -> None:
+    """Browsers send no Origin on a same-origin GET; the pairing page's fetch is one (found with the kiosk in the VM)."""
+
+    async def go() -> None:
+        async with Stack() as s:
+            for headers in (
+                {},  # not a browser page: no Origin, no Fetch Metadata
+                {"Sec-Fetch-Site": "cross-site"},  # another site's page (a browser would also send its Origin)
+                {"Sec-Fetch-Site": "same-site"},  # a sibling subdomain is not this origin
+                {"Sec-Fetch-Site": "none"},  # typed into the address bar, not the page
+                {"Origin": "https://evil.example.com", "Sec-Fetch-Site": "same-origin"},  # the Origin decides when sent
+            ):
+                code = s.server.pairing.create("remote")
+                reply = await s.http("/api/pair", {**headers, "X-Atlas-Pairing-Code": code})
+                assert reply.status == 403, headers
+                assert "set-cookie" not in reply.headers
+            code = s.server.pairing.create("kiosk")
+            reply = await s.http("/api/pair", {"Sec-Fetch-Site": "same-origin", "X-Atlas-Pairing-Code": code})
+            assert reply.status == 200 and reply.headers["set-cookie"].startswith(COOKIE_NAME + "=")
+
+    run(go())
+
+
 def test_host_header_must_name_this_server() -> None:
     async def go() -> None:
         async with Stack() as s:
@@ -108,6 +132,10 @@ def test_origin_helpers() -> None:
     assert not origin_allowed("https://atlas.lan.evil.com", allowed)
     assert not origin_allowed(None, allowed) and not origin_allowed("null", allowed)
     assert host_allowed("atlas.lan", allowed) and not host_allowed("atlas.lan:8443", allowed)
+    assert same_origin_request(None, "same-origin", allowed) and same_origin_request(None, " Same-Origin ", allowed)
+    assert not same_origin_request(None, None, allowed) and not same_origin_request(None, "cross-site", allowed)
+    assert not same_origin_request("https://evil.example.com", "same-origin", allowed)
+    assert same_origin_request("https://atlas.lan", None, allowed)
     assert not host_allowed(None, allowed)
 
 

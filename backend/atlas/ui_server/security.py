@@ -53,6 +53,19 @@ def origin_allowed(origin: str | None, allowed: frozenset[str]) -> bool:
     return origin is not None and normalize_origin(origin) in allowed
 
 
+def same_origin_request(origin: str | None, sec_fetch_site: str | None, allowed: frozenset[str]) -> bool:
+    """An HTTP request from a page of this server (not for WebSockets, which always carry an Origin).
+
+    A browser leaves ``Origin`` out of a same-origin GET (Fetch standard), so the pairing page's own request has none;
+    the browser then says ``Sec-Fetch-Site: same-origin``, a header page scripts can't set. A request from another
+    site carries its foreign Origin (refused) and ``Sec-Fetch-Site: cross-site``. A request with neither header (not a
+    browser page) is refused too. The Host header is checked separately, for every request.
+    """
+    if origin is not None:
+        return origin_allowed(origin, allowed)
+    return (sec_fetch_site or "").strip().lower() == "same-origin"
+
+
 def host_allowed(host: str | None, allowed: frozenset[str]) -> bool:
     """The Host header must name this server (defence against DNS rebinding)."""
     if not host:

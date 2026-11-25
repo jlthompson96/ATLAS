@@ -52,6 +52,7 @@ from atlas.ui_server.security import (
     default_origins,
     host_allowed,
     origin_allowed,
+    same_origin_request,
 )
 from atlas.ui_server.session import Session
 
@@ -219,7 +220,9 @@ class UiServer:
 
     def _pair(self, connection: ServerConnection, request: Request) -> Response:
         headers = request.headers
-        if not origin_allowed(headers.get("Origin"), self.origins):
+        # The pairing page's fetch is a same-origin GET, which browsers send without an Origin (found with the Pi
+        # kiosk in the ARM64 VM: every browser pairing was refused): see same_origin_request.
+        if not same_origin_request(headers.get("Origin"), headers.get("Sec-Fetch-Site"), self.origins):
             return _text(HTTPStatus.FORBIDDEN, "Origin not allowed")
         code = headers.get(PAIR_HEADER)
         if code is None:
