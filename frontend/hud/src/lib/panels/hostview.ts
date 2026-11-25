@@ -27,11 +27,13 @@ export function powerBadge(host: HostStatus | null): Badge {
 }
 
 export function linkBadge(host: HostStatus | null): Badge {
-  switch (known(host?.llm.link, LINK, 'down')) {
+  // No host status at all means nothing is known about the tunnel: say so instead of claiming it is down.
+  if (!host) return { glyph: '?', text: 'LINK: UNKNOWN', tone: 'muted' };
+  switch (known(host.llm.link, LINK, 'down')) {
     case 'up':
       return { glyph: '✓', text: 'LINK: WG ✓', tone: 'ok' };
     default:
-      return { glyph: '✗', text: 'LINK: DOWN ✗', tone: host ? 'danger' : 'muted' };
+      return { glyph: '✗', text: 'LINK: DOWN ✗', tone: 'danger' };
   }
 }
 
