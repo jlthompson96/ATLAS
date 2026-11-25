@@ -218,7 +218,7 @@ build_venv() {
     /bin/sh -c 'set -eu; exec 3>&1 1>&2; v="$RUNTIME_DIRECTORY/venv"; /usr/bin/python3 -I -m venv "$v"
       "$v/bin/python" -I -m pip --isolated install --quiet --no-cache-dir --no-index --find-links "$1" \
         --require-hashes --only-binary=:all: --no-deps -r "$2"
-      grep -q "^pip==" "$2" || "$v/bin/python" -I -m pip --isolated uninstall --quiet --yes pip
+      grep -q "^pip==" "$2" || "$v/bin/python" -I -m pip --isolated uninstall --quiet --yes --no-cache-dir pip
       tar -C "$v" -cf - . >&3' sh "$wheels" "$lock" </dev/null |
     tar -x -C "$dest" --no-same-owner --no-same-permissions --no-overwrite-dir ||
     die "building the venv for $name failed"
