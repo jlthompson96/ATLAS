@@ -685,7 +685,7 @@ def report(runs: Sequence[Mapping[str, Any]]) -> str:
         "",
         f"Criteria (PLAN.md §2.8): accuracy ≥ {MIN_ACCURACY:.0%} over every graded attempt; TTFT p50 ≤ "
         f"{MAX_TTFT_MS:.0f} ms at a ~{PERF_PROMPT_TOKENS}-token prompt (first token of any kind, reasoning included; "
-        "the first visible token is reported beside it); decode p50 ≥ {MIN_DECODE_TPS:.0f} tok/s; "
+        f"the first visible token is reported beside it); decode p50 ≥ {MIN_DECODE_TPS:.0f} tok/s; "
         f"VRAM ≤ {MAX_VRAM_MB} MB in total (read from nvidia-smi on the desktop).",
     ]
     failures: dict[str, dict[str, list[str]]] = {}

@@ -367,6 +367,7 @@ def test_report_table_failures_and_mixed_case_sets() -> None:
     assert "meets B5" in text and "misses: decode (FAIL)" in text
     assert "| N48" in text and "| N49" in text
     assert "WARNING: these runs used different case sets" in text
+    assert "decode p50 ≥ 25 tok/s" in text and "{" not in text
 
 
 # --- the CLI end to end against a fake LM Studio ------------------------------------------------
