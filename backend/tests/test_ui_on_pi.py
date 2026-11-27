@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from atlas.core.service import EXECUTOR_SOCKET, STATE_DIR
+from atlas.core.service import EXECUTOR_SOCKET, STATE_DIR, parser
 from atlas.llm.lmstudio import CredentialError, read_token_file
 from atlas.ui_server.config import ConfigError, UiConfig, load_config
 
@@ -66,7 +66,10 @@ def _blank_token() -> Path:
 
 def test_core_unit_matches_the_service_defaults() -> None:
     unit = (SYSTEMD / "atlas-core.service").read_text()
-    assert "ExecStart=/var/lib/atlas/current/venv/atlas-core/bin/python -m atlas.core\n" in unit  # --backend none
+    # No link drop-in (or an empty value): $ATLAS_CORE_ARGS expands to no arguments, i.e. --backend none.
+    assert "EnvironmentFile" not in unit and "Environment=ATLAS_CORE_ARGS" not in unit
+    assert "ExecStart=/var/lib/atlas/current/venv/atlas-core/bin/python -m atlas.core $ATLAS_CORE_ARGS\n" in unit
+    assert parser().parse_args([]).backend == "none"
     assert "StateDirectory=atlas/core\n" in unit and Path("/var/lib/atlas/core") == STATE_DIR
     assert Path("/run/atlas/executor.sock") == EXECUTOR_SOCKET
     assert "SetCredential=lmstudio-api-token:\\n\n" in unit  # a blank default, never a value
@@ -90,6 +93,85 @@ def test_missing_credentials_skips_only_credentials_with_a_default(tmp_path: Pat
     )
     r = bash('missing_credentials "$1"', str(unit))
     assert r.returncode == 0 and r.stdout == f"{tmp_path}/b.cred\n"
+
+
+def _core_link(tmp_path: Path, content: str) -> tuple[str, str]:
+    """(problem, drop-in) for a core-link.conf holding ``content``."""
+    conf = tmp_path / "core-link.conf"
+    conf.write_text(content)
+    problem = bash('core_link_problem "$1"', str(conf))
+    dropin = bash('core_link_dropin "$1"', str(conf))
+    assert problem.returncode == 0 and problem.stderr == "", problem.stderr
+    return problem.stdout, dropin.stdout
+
+
+def _dropin_args(dropin: str) -> list[str]:
+    line = dropin.splitlines()[-1]
+    assert line.startswith('Environment="ATLAS_CORE_ARGS=') and line.endswith('"'), line
+    return line[len('Environment="ATLAS_CORE_ARGS=') : -1].split()  # systemd splits $ATLAS_CORE_ARGS at whitespace
+
+
+def test_core_link_template_is_inert_and_its_examples_parse(tmp_path: Path) -> None:
+    template = bash("core_link_conf_template").stdout
+    assert all(line.startswith("#") for line in template.splitlines())
+    problem, dropin = _core_link(tmp_path, template)
+    assert problem == "" and _dropin_args(dropin) == []  # unlinked until the owner edits the file
+    assert dropin.splitlines()[1] == "[Service]"
+    examples = [line[2:] for line in template.splitlines() if line.startswith("# ATLAS_CORE_ARGS=")]
+    assert len(examples) == 2
+    for example in examples:
+        problem, dropin = _core_link(tmp_path, example + "\n")
+        assert problem == ""
+        args = parser().parse_args(_dropin_args(dropin))
+        assert (args.backend, args.model, args.reasoning_effort) == ("lmstudio", "google/gemma-4-e4b", "none")
+        assert args.base_url == "http://10.77.0.2:1234" and args.hostd_url == "http://10.77.0.2:8770"
+        assert args.token_file is None and args.socket is None and args.credentials_dir is None
+    assert parser().parse_args(_dropin_args(_core_link(tmp_path, examples[0])[1])).no_hostd
+
+
+def test_core_link_allows_only_the_link_flags(tmp_path: Path) -> None:
+    flags = bash('printf "%s\\n" "${CORE_LINK_FLAGS[@]}"').stdout.split()
+    known = {o for a in parser()._actions for o in a.option_strings}
+    assert set(flags) <= known and "--base-url" not in flags and "--token-file" not in flags
+    ok = {
+        "": [],
+        "# comment only\n": [],
+        'ATLAS_CORE_ARGS=""\n': [],
+        "ATLAS_CORE_ARGS=--backend lmstudio   --model=m\n": ["--backend", "lmstudio", "--model=m"],
+        'ATLAS_CORE_ARGS="--model * --idle-sleep"': ["--model", "*", "--idle-sleep"],  # no glob expansion
+    }
+    for content, words in ok.items():
+        problem, dropin = _core_link(tmp_path, content)
+        assert problem == "" and _dropin_args(dropin) == words, content
+    bad = {
+        'ATLAS_CORE_ARGS="--backend lmstudio --base-url http://192.0.2.9:1234"': "--base-url is not an allowed flag",
+        'ATLAS_CORE_ARGS="--token-file=/tmp/t"': "--token-file is not an allowed flag",
+        'ATLAS_CORE_ARGS="--socket /tmp/s"': "--socket is not",
+        'ATLAS_CORE_ARGS="--credentials-dir /tmp"': "--credentials-dir is not",
+        'ATLAS_CORE_ARGS="--model $(id)"': "only comments and one",
+        'ATLAS_CORE_ARGS="--model `id`"': "only comments and one",
+        'ATLAS_CORE_ARGS="--model \\x"': "only comments and one",
+        'ATLAS_CORE_ARGS="--model %h"': "only comments and one",  # a systemd specifier in Environment=
+        'ATLAS_CORE_ARGS="--model m" --socket /tmp/s': "only comments and one",
+        "ATLAS_CORE_ARGS='--backend lmstudio'": "only comments and one",
+        "OTHER=1": "only comments and one",
+        'ATLAS_CORE_ARGS="--backend none"\nATLAS_CORE_ARGS="--backend lmstudio"': "ATLAS_CORE_ARGS is set more than once",
+    }
+    for content, why in bad.items():
+        problem, _ = _core_link(tmp_path, content + "\n")
+        assert problem.startswith(why) and problem.count("\n") == 1, (content, problem)
+
+
+def test_provision_checks_the_core_link_file_before_writing_the_dropin() -> None:
+    t = text("provision-pi.sh")
+    create = t.split('if [ -e "$CORE_LINK_CONF" ]; then', 1)[1].split("\nfi\n", 1)[0]
+    assert "never overwritten" in create and 'write_file "$CORE_LINK_CONF" 644 "$(core_link_conf_template)"' in create
+    after = t.split('if [ -e "$CORE_LINK_CONF" ]; then', 1)[1]
+    check = after.index('[ -z "$problem" ] || die "$CORE_LINK_CONF: $problem"')
+    assert check < after.index('write_file "$CORE_LINK_DROPIN" 644 "$(core_link_dropin "$link_conf")"')
+    assert bash('echo "$CORE_LINK_DROPIN"').stdout == "/etc/systemd/system/atlas-core.service.d/link.conf\n"
+    v = (PROV / "pi-verify.sh").read_text()
+    assert 'core_link_problem "$CORE_LINK_CONF"' in v and 'core_link_dropin "$CORE_LINK_CONF"' in v
 
 
 def test_pi_lan_ip_ignores_the_placeholder_and_refuses_junk(tmp_path: Path) -> None:

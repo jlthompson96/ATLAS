@@ -1,6 +1,6 @@
 # Runbook: chat with the real LM Studio from the Mac (dev link, before WireGuard)
 
-Goal: a first end-to-end test of `python -m atlas.core.cli --backend lmstudio` against LM Studio on your desktop, through the full policy, taint and quarantined-reader path. Nothing here is the production link. The production link is WireGuard (`10.77.0.1` to `10.77.0.2`, PLAN.md §5.3), which this runbook does not set up.
+Goal: a first end-to-end test of `python -m atlas.core.cli --backend lmstudio` against LM Studio on your desktop, through the full policy, taint and quarantined-reader path. Nothing here is the production link. The production link is WireGuard (`10.77.0.1` to `10.77.0.2`, PLAN.md §5.3), which this runbook does not set up: see core-link.md.
 
 ## Security caveats (read first)
 

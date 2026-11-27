@@ -2,7 +2,7 @@
 
 Scope: put `atlas-core` and `atlas-ui` on the Pi so that a browser on the home LAN shows the real HUD at `https://<Pi LAN address>/`. No display is needed; the kiosk on the Pi's own screen comes later. Sources: PLAN Phase 2, contracts/services.md 1.5.0 (sections 2, 4 and 6), [proposal 2026-11-23-release-hud](../../contracts/proposals/2026-11-23-release-hud.md).
 
-**What you get until the desktop is linked:** `atlas-core` runs with `--backend none`. The orb shows `LINK DOWN` ("No desktop linked"). Time, date and help are answered on the Pi; every other request gets "No desktop is linked to ATLAS yet…". Nothing reaches a model, and nothing can be sent: an approval would go to `atlas-executor`, which isn't installed, and fail.
+**What you get until the desktop is linked:** `atlas-core` runs with `--backend none`. The orb shows `LINK DOWN` ("No desktop linked"). Time, date and help are answered on the Pi; every other request gets "No desktop is linked to ATLAS yet…". Nothing reaches a model, and nothing can be sent: an approval would go to `atlas-executor`, which isn't installed, and fail. To link the desktop: core-link.md.
 
 **Who does what:** **Owner** steps need you at the Pi's console or a browser. **Claude** steps run in the shared tmux session after you've typed `sudo -v`. Steps 1–4 need the read-only overlay off (they write `/etc`); deploys and pairing don't.
 
