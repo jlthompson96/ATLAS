@@ -86,8 +86,9 @@ Environment=PYTHONPATH=/var/lib/atlas/current/backend
 
 # --- the desktop link (runbook core-link.md, ADR 0004) ---
 # ATLAS_CORE_ARGS comes from the drop-in atlas-core.service.d/link.conf, which provision-pi.sh writes from the owner's
-# /etc/atlas/core-link.conf after checking it, e.g. --backend lmstudio --model google/gemma-4-e4b --reasoning-effort none
-# --no-hostd. Unset or empty: $ATLAS_CORE_ARGS expands to no arguments, so core runs unlinked (--backend none).
+# /etc/atlas/core-link.conf after checking it, e.g. --backend lmstudio --model google/gemma-4-e4b
+# --reasoning-effort none --no-hostd. Unset or empty: $ATLAS_CORE_ARGS expands to no arguments, so core runs unlinked
+# (--backend none).
 
 # --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
 # $ATLAS_CORE_ARGS unbraced: systemd splits it at whitespace into separate arguments (no shell is involved).
