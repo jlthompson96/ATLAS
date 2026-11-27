@@ -71,8 +71,9 @@ UMask=0077
 # --- secrets: systemd-creds, readable only by this unit (services.md section 4) ---
 LoadCredentialEncrypted=lmstudio-api-token:/var/lib/atlas/credentials/atlas-core/lmstudio-api-token.cred
 # Until the desktop is linked there is no token file: this default (a single newline) stands in, because systemd uses
-# it only when the file above can't be loaded. atlas-core runs with --backend none, which never reads it, and the LM
-# Studio backend strips and refuses an empty token, so a linked core fails closed if the real credential is missing.
+# it only when the file above can't be loaded. Unlinked, atlas-core runs with --backend none, which never reads it, and
+# the LM Studio backend strips and refuses an empty token, so a linked core fails closed if the real credential is
+# missing.
 # Not an empty value: a unit file ignores `SetCredential=ID:` as invalid syntax (systemd 257; found in the ARM64 VM),
 # and then the missing file fails the unit at the CREDENTIALS step.
 SetCredential=lmstudio-api-token:\n
@@ -83,9 +84,14 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/var/lib/atlas/current/backend
 
+# --- the desktop link (runbook core-link.md, ADR 0004) ---
+# ATLAS_CORE_ARGS comes from the drop-in atlas-core.service.d/link.conf, which provision-pi.sh writes from the owner's
+# /etc/atlas/core-link.conf after checking it, e.g. --backend lmstudio --model google/gemma-4-e4b --reasoning-effort none
+# --no-hostd. Unset or empty: $ATLAS_CORE_ARGS expands to no arguments, so core runs unlinked (--backend none).
+
 # --- code runs from the active release through the symlink, never a versioned path (services.md section 6) ---
-# Once the desktop is linked (ADR 0004): add --backend lmstudio --model google/gemma-4-e4b --reasoning-effort none
-ExecStart=/var/lib/atlas/current/venv/atlas-core/bin/python -m atlas.core
+# $ATLAS_CORE_ARGS unbraced: systemd splits it at whitespace into separate arguments (no shell is involved).
+ExecStart=/var/lib/atlas/current/venv/atlas-core/bin/python -m atlas.core $ATLAS_CORE_ARGS
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=15

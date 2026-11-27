@@ -9,7 +9,7 @@
 # is on the read-only root.
 #
 # atlas-core's other credential, lmstudio-api-token, comes from the desktop when the link is set up (runbook
-# wireguard.md); until then the unit's empty default stands in and atlas-core runs without a desktop.
+# core-link.md); until then the unit's empty default stands in and atlas-core runs without a desktop.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

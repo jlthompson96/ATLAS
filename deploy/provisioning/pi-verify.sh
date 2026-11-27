@@ -126,6 +126,27 @@ for unit in atlas-audit atlas-egress atlas-backup atlas-core atlas-ui; do
   esac
 done
 stat_is() { [ "$(stat -c '%U:%G %a' "$1" 2>/dev/null)" = "$2" ]; }
+
+# atlas-core's link to the desktop (runbook core-link.md): the owner's flags, root-owned and from the allowlist only.
+if [ -f "$CORE_LINK_CONF" ]; then
+  if stat_is "$CORE_LINK_CONF" "root:root 644" || stat_is "$CORE_LINK_CONF" "root:root 600"; then
+    pass "[core link] $CORE_LINK_CONF is root-owned and not writable by others"
+  else
+    fail "[core link] $CORE_LINK_CONF is $(stat -c '%U:%G %a' "$CORE_LINK_CONF"), want root:root 644"
+  fi
+  problem="$(core_link_problem "$CORE_LINK_CONF")"
+  if [ -n "$problem" ]; then
+    fail "[core link] $CORE_LINK_CONF: $problem"
+  elif [ -f "$CORE_LINK_DROPIN" ] && [ "$(cat "$CORE_LINK_DROPIN")" = "$(core_link_dropin "$CORE_LINK_CONF")" ]; then
+    pass "[core link] $CORE_LINK_DROPIN matches $CORE_LINK_CONF (allowed flags only)"
+  else
+    fail "[core link] $CORE_LINK_DROPIN is missing or stale: rerun provision-pi.sh"
+  fi
+  args="$(_core_link_words "$CORE_LINK_CONF" | paste -sd' ' - || true)"
+  note "[core link] atlas-core flags: ${args:-none, unlinked} (--backend lmstudio = linked)"
+else
+  note "[core link] $CORE_LINK_CONF missing: core runs unlinked (provision-pi.sh creates it)"
+fi
 if stat_is "$DATA" "root:root 755"; then pass "[StateDirectory] $DATA is root:root 755"; else fail "[StateDirectory] $DATA is $(stat -c '%U:%G %a' "$DATA")"; fi
 for name in $(service_list "$ETC/services.conf"); do
   d="$DATA/${name#atlas-}"

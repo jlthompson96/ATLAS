@@ -84,6 +84,20 @@ IPAddressAllow=$ATLAS_LAN_BROADCAST"
 # The proxy refuses connections into the LAN's own prefixes even when they look public (global IPv6 prefix, review F6).
 write_file /etc/systemd/system/atlas-egress.service.d/lan.conf 644 "[Service]
 Environment=ATLAS_EGRESS_LAN_PREFIXES=$ATLAS_LAN_CIDR,$ATLAS_LAN_PREFIX6"
+# atlas-core's link to the desktop (runbook core-link.md): the owner's file, created commented out and never
+# overwritten, is checked and turned into a drop-in. A bad file stops provisioning before systemd sees any of it.
+if [ -e "$CORE_LINK_CONF" ]; then
+  log "ok      $CORE_LINK_CONF (the owner's link settings, never overwritten)"
+  link_conf="$CORE_LINK_CONF"
+else
+  write_file "$CORE_LINK_CONF" 644 "$(core_link_conf_template)"
+  link_conf="$(mktemp)" # dry run: the template stands in for the file it would have written
+  core_link_conf_template >"$link_conf"
+fi
+problem="$(core_link_problem "$link_conf")"
+[ -z "$problem" ] || die "$CORE_LINK_CONF: $problem"
+write_file "$CORE_LINK_DROPIN" 644 "$(core_link_dropin "$link_conf")"
+[ "$link_conf" = "$CORE_LINK_CONF" ] || rm -f "$link_conf"
 
 log "== release helper and sudoers"
 install_file "$here/atlas-release.sh" /usr/local/sbin/atlas-release 755
